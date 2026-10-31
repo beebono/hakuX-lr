@@ -469,9 +469,7 @@ static void idle(void)
     if (hle_vk_lost()) {
         return;                         /* nothing runs on it any more */
     }
-    VkSemaphoreWaitInfo wi = { .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO, .semaphoreCount = 1,
-                               .pSemaphores = &g_ps.tl, .pValues = &g_ps.submitted };
-    VkResult r = T.vkWaitSemaphores(g_hvk.dev, &wi, 2000000000ull);
+    VkResult r = hle_tl_sem_wait(g_ps.tl, g_ps.submitted, 2000000000ull);
     if (r != VK_TIMEOUT) {
         hle_vk_check(r, "vkWaitSemaphores (present)");
     }
@@ -658,9 +656,7 @@ static bool win_surface(HleWindow *win, VkSurfaceKHR *surf)
 
 static bool wait_value(uint64_t v)
 {
-    VkSemaphoreWaitInfo wi = { .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO, .semaphoreCount = 1,
-                               .pSemaphores = &g_ps.tl, .pValues = &v };
-    const VkResult r = T.vkWaitSemaphores(g_hvk.dev, &wi, 1000000000ull);
+    const VkResult r = hle_tl_sem_wait(g_ps.tl, v, 1000000000ull);
     if (r == VK_ERROR_DEVICE_LOST) {
         hle_vk_lose(r, "vkWaitSemaphores (present)");
     }
