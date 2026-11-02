@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Fixes
+
+- **No crash when RetroArch remakes its swapchain mid-frame** — Newer
+  RetroArch can rebuild its swapchain inside a frame, for example when a
+  desktop window is resized. The core now waits for RetroArch to finish
+  with its frame images before freeing them. Normal frames have no extra
+  wait. PortareOS isn't affected, because its display keeps one mode.
+- **Built against PortareOS's current RetroArch** — The libretro headers
+  now come from RetroArch `11e8931021`, the version PortareOS ships.
+  The core works with older RetroArch versions as before.
+
 ## linux-v0.17.1 (Linux, aarch64 and x86-64)
 
 ### Fixes

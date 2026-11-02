@@ -18,6 +18,19 @@
  * acquisition until video_cb has submitted the copy, as the window's
  * presenter holds it; the renderer's next write to it waits on its barrier.
  *
+ * Before an image is destroyed - the sync mask changed, or the frame's size -
+ * the queue is waited on until idle (retire). wait_sync_index covers an
+ * index's last frame only while RetroArch's fences follow its index. Newer
+ * RetroArch applies a pending resize inside video_cb (a window resized,
+ * fullscreen toggled). When that remakes the swapchain, it drains the queue
+ * and drops its fences first, then submits the frame under whichever index
+ * the new swapchain starts from. That frame can still be reading its image
+ * when the core next sees a changed mask. Images are rarely destroyed, so a
+ * frame costs no extra wait, on any RetroArch version. Not covered: the same
+ * remake with an unchanged image count, where a command buffer can be
+ * recorded again while still in flight. That takes a desktop window; KMS
+ * keeps one mode.
+ *
  * RetroArch letting the context go stops the core (nc_lr_end, M2): the
  * renderer's objects destroyed, the device forgotten (RetroArch destroys
  * it) and the next create_device2 makes another.
@@ -106,6 +119,19 @@ static bool create_device(struct retro_vulkan_context *context, VkInstance insta
 
 static void destroy_device(void)
 {
+}
+
+/* Every frame handed to RetroArch finished: the queue idle, under its lock
+ * and the renderer's (as the display's own waits take them). */
+static void retire(void)
+{
+    if (hle_vk_lost()) {
+        return;
+    }
+    hle_vk_queue_lock();
+    const VkResult r = T.vkQueueWaitIdle(g_hvk.queue);
+    hle_vk_queue_unlock();
+    hle_vk_check(r, "vkQueueWaitIdle (libretro images)");
 }
 
 static void destroy_images(void)
@@ -239,6 +265,7 @@ static bool export_image(unsigned idx, uint32_t w, uint32_t h)
         return true;
     }
     if (g_ex[idx].view) {
+        retire();                   /* a new size: the last frame may still read it */
         T.vkDestroyImageView(g_hvk.dev, g_ex[idx].view, NULL);
         T.vkDestroyImage(g_hvk.dev, g_ex[idx].img, NULL);
         T.vkFreeMemory(g_hvk.dev, g_ex[idx].mem, NULL);
@@ -293,7 +320,8 @@ bool nc_lr_vk_run(retro_video_refresh_t video)
         return true;
     }
     const unsigned mask = g_vk->get_sync_index_mask(g_vk->handle);
-    if (mask != g_mask) {           /* RetroArch's images changed: it is idle (the contract) */
+    if (mask != g_mask) {           /* RetroArch's images changed, maybe in the last video_cb */
+        retire();
         destroy_images();
         g_mask = mask;
     }
