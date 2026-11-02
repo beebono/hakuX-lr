@@ -703,7 +703,11 @@ static int vk_init(PFN_vkGetInstanceProcAddr gipa_shared, VkInstance inst_shared
         .runtimeDescriptorArray = VK_TRUE, .descriptorBindingPartiallyBound = VK_TRUE,
         .descriptorBindingSampledImageUpdateAfterBind = VK_TRUE,
         .shaderSampledImageArrayNonUniformIndexing = VK_TRUE,
-        .hostQueryReset = c->host_query_reset };
+        .hostQueryReset = c->host_query_reset,
+        /* RetroArch's device wrapper (make) adds VK_KHR_sampler_mirror_clamp_to_edge
+         * for its own samplers; with this struct in the chain the feature must
+         * then be on (VUID-VkDeviceCreateInfo-ppEnabledExtensionNames-02832) */
+        .samplerMirrorClampToEdge = q12.samplerMirrorClampToEdge };
     VkPhysicalDeviceFeatures2 f = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = v13 ? &f12 : NULL };
     /* below 1.3: the parts' own structs (no demote: SPIR-V 1.3 discards) */
