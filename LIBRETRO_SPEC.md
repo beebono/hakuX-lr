@@ -41,10 +41,7 @@ in particular is too much overhead.
 | `libretro-common/include/libretro_vulkan.h` there | blob `2a47d0ad583d8f14ffbf52bd7adb25faed1361d7`: render interface 5, negotiation interface 2 (`create_instance`, `create_device2`) |
 
 Vendor the libretro headers from that RetroArch revision; they govern what the
-target supports. Until 2026-11-02 the baseline was RetroArch `9705e03a59`.
-Its negotiation interface 3 let the frontend present on a second queue.
-Upstream withdrew it in `40e2fa3c88`, and hakuX never used it: it declares
-version 2 and one queue.
+target supports.
 
 | In the source | Consequence |
 | --- | --- |

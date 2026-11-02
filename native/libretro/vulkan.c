@@ -1,39 +1,19 @@
 /*
- * hakuX native core — the libretro core's Vulkan (LIBRETRO_SPEC.md section 7):
- * the renderer on RetroArch's instance and device, and each frame handed to
- * RetroArch as an image it samples.
+ * hakuX libretro Vulkan output (LIBRETRO_SPEC.md section 7).
  *
- * The device: create_device2 builds the renderer's device on RetroArch's
- * instance and GPU (hle_vk_init_shared), through RetroArch's wrapper, which
- * adds what RetroArch needs itself. The queue is shared (the Adreno 740 has
- * one): every submission of the renderer takes RetroArch's lock_queue inside
- * its own (hle_vk_queue_lock). The guest boots once RetroArch has taken the
- * device (context_reset).
+ * create_device2 initializes the renderer on RetroArch's instance and GPU.
+ * RetroArch's wrapper adds its device requirements. Submissions share a
+ * queue, locked by hle_vk_queue_lock in renderer-then-frontend order.
+ * context_reset starts the guest; context_destroy stops it before RetroArch
+ * destroys the device.
  *
- * Each retro_run, after wait_sync_index: the front display slot is copied,
- * without its overscan, into the sync index's own image, the copy handed over
- * with set_command_buffers (RetroArch submits it ahead of its own work, in
- * video_cb) and the image with set_image. Every frame is copied, new or not,
- * so no image is shown across sync indices. The slot stays held from its
- * acquisition until video_cb has submitted the copy, as the window's
- * presenter holds it; the renderer's next write to it waits on its barrier.
+ * Each retro_run copies the cropped front display slot into an image for
+ * the current sync index. set_command_buffers gives RetroArch the copy,
+ * and set_image gives it the output image. Keep the slot acquired until
+ * video_cb has submitted the copy so the renderer cannot overwrite it.
  *
- * Before an image is destroyed - the sync mask changed, or the frame's size -
- * the queue is waited on until idle (retire). wait_sync_index covers an
- * index's last frame only while RetroArch's fences follow its index. Newer
- * RetroArch applies a pending resize inside video_cb (a window resized,
- * fullscreen toggled). When that remakes the swapchain, it drains the queue
- * and drops its fences first, then submits the frame under whichever index
- * the new swapchain starts from. That frame can still be reading its image
- * when the core next sees a changed mask. Images are rarely destroyed, so a
- * frame costs no extra wait, on any RetroArch version. Not covered: the same
- * remake with an unchanged image count, where a command buffer can be
- * recorded again while still in flight. That takes a desktop window; KMS
- * keeps one mode.
- *
- * RetroArch letting the context go stops the core (nc_lr_end, M2): the
- * renderer's objects destroyed, the device forgotten (RetroArch destroys
- * it) and the next create_device2 makes another.
+ * A swapchain rebuild with an unchanged sync mask remains undetected:
+ * wait_sync_index may miss an in-flight command buffer before it is reset.
  */
 #include "native/libretro/libretro_int.h"
 #include "hw/xbox/hle/vk/vkdev.h"
@@ -121,8 +101,9 @@ static void destroy_device(void)
 {
 }
 
-/* Every frame handed to RetroArch finished: the queue idle, under its lock
- * and the renderer's (as the display's own waits take them). */
+/* Swapchain rebuilds inside video_cb can move a frame to another sync
+ * index. Wait for the shared queue before freeing images, since
+ * wait_sync_index may no longer cover their last use. */
 static void retire(void)
 {
     if (hle_vk_lost()) {
@@ -257,15 +238,13 @@ bool nc_lr_vk_negotiate(void)
     return true;
 }
 
-/* idx's image, w x h: made again when its size changed (wait_sync_index has
- * returned for idx: RetroArch is done with the old one). */
 static bool export_image(unsigned idx, uint32_t w, uint32_t h)
 {
     if (g_ex[idx].img && g_ex[idx].w == w && g_ex[idx].h == h) {
         return true;
     }
     if (g_ex[idx].view) {
-        retire();                   /* a new size: the last frame may still read it */
+        retire();
         T.vkDestroyImageView(g_hvk.dev, g_ex[idx].view, NULL);
         T.vkDestroyImage(g_hvk.dev, g_ex[idx].img, NULL);
         T.vkFreeMemory(g_hvk.dev, g_ex[idx].mem, NULL);
@@ -320,7 +299,7 @@ bool nc_lr_vk_run(retro_video_refresh_t video)
         return true;
     }
     const unsigned mask = g_vk->get_sync_index_mask(g_vk->handle);
-    if (mask != g_mask) {           /* RetroArch's images changed, maybe in the last video_cb */
+    if (mask != g_mask) {
         retire();
         destroy_images();
         g_mask = mask;
