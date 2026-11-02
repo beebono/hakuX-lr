@@ -36,12 +36,15 @@ in particular is too much overhead.
 | --- | --- |
 | portare-ch/hakuX `master` | `93bad3d7fe2261e65adc9b3e69602e175d8d7da7` |
 | hakuX's FEX (`external/fex`) | `52018bf46a8279b22bce738548ab3f40db467064` |
-| portare-ch/portareos `next` | `0f02b9cff6b54269b7e621a70649138045caa464` |
-| RetroArch in PortareOS | `9705e03a59145bc33aa79fe6b52a92005703f74e` |
-| `libretro-common/include/libretro_vulkan.h` there | blob `1d5c7003c333fbfd8fecde254002fe4dc710a7b4`: render interface 5, negotiation interface 3 (`create_instance`, `create_device2`) |
+| portare-ch/portareos `next` | `321912638871a90caf8cf517ff4e277b63df422b` (portareos#798) |
+| RetroArch in PortareOS | `11e8931021eb6b7fa69c04f52dd5d385841fdbbe` |
+| `libretro-common/include/libretro_vulkan.h` there | blob `2a47d0ad583d8f14ffbf52bd7adb25faed1361d7`: render interface 5, negotiation interface 2 (`create_instance`, `create_device2`) |
 
 Vendor the libretro headers from that RetroArch revision; they govern what the
-target supports.
+target supports. Until 2026-11-02 the baseline was RetroArch `9705e03a59`.
+Its negotiation interface 3 let the frontend present on a second queue.
+Upstream withdrew it in `40e2fa3c88`, and hakuX never used it: it declares
+version 2 and one queue.
 
 | In the source | Consequence |
 | --- | --- |
