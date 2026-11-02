@@ -67,6 +67,29 @@ Choose the archive for your CPU:
 Set a writable **Settings → Directory → Save Files** location. Leave
 **save states, rewind and run-ahead off**; they are unsupported.
 
+<details>
+<summary>Set up a test machine with one script</summary>
+
+`tools/linux/setup-hakux.sh` installs RetroArch with the distribution's
+package manager (pacman, apt, dnf or zypper), downloads the newest release
+for the CPU, checks KVM on AMD64, and gives hakuX its own RetroArch
+configuration, so an existing one is left alone. It writes
+`~/.local/bin/start-hakux.sh`, which starts a game by path or by part of its
+name. On a desktop RetroArch opens a window; without a display server it
+draws directly through KMS, as on PortareOS.
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/portare-ch/hakuX-lr/master/tools/linux/setup-hakux.sh
+sh setup-hakux.sh
+start-hakux.sh "burnout 3"
+```
+
+Games go in `~/roms/xbox`. Run the script again to update the core;
+`--version`, `--tarball` and `--core` install a specific release or a local
+build (`sh setup-hakux.sh --help`).
+
+</details>
+
 <a id="play-on-amd64-x86-64-linux-systems"></a>
 
 #### AMD64: set up KVM first
