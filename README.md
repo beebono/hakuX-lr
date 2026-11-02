@@ -1,25 +1,117 @@
-# hakuX libretro core for aarch64 / amd64 devices and PortareOS
+# hakuX-lr
 
-Play original Xbox games through RetroArch on the **Retroid Pocket Nova**
-with **[PortareOS](https://github.com/portare-ch/portareos)**, which includes
-hakuX. The ROCKNIX community has also tested the build on other devices.
-For other Linux systems, install the core in RetroArch on
-**[ARM64 (aarch64)](#play-on-other-aarch64-linux-systems)** or
-**[AMD64 (x86-64)](#play-on-amd64-x86-64-linux-systems)**.
+Play original Xbox games in RetroArch on **ARM64 (aarch64)** and
+**AMD64 (x86-64) Linux**. This fork of
+[hakuX](https://github.com/rfandango/hakuX) is included in
+[PortareOS](https://github.com/portare-ch/portareos) for the Retroid Pocket Nova.
 
-Bring your own game disc images. **No BIOS, MCPX ROM or hard disk image is
-needed.** hakuX creates the console's storage on first launch.
+You need your own game images. **No BIOS, MCPX ROM or hard disk image is
+required**; hakuX creates its storage on first launch.
 
-## hakuX is free
+## Install
 
-hakuX is free, and always will be. Download the PortareOS Linux core from
-[this fork's releases](https://github.com/portare-ch/hakuX-lr/releases), or the
-Android app from [upstream's releases](https://github.com/rfandango/hakuX/releases).
+<a id="play-on-portareos"></a>
 
-There are no paid subscriptions, unlocks or "premium" builds. If someone
-charged you for hakuX, request a refund and download it here for free.
+### PortareOS
 
-## How hakuX compares with xemu
+1. [Install PortareOS](https://github.com/portare-ch/portareos/blob/next/documentation/INSTALLATION.md),
+   or update through **Settings → About → Update** and restart.
+2. Copy an Xbox `.iso` or DVD `.chd` to `/storage/roms/xbox/`.
+   Extract ZIP or 7z archives first.
+3. Open **Xbox** in the launcher and select a game. If it is missing,
+   press **Home** to return to the console list, then reopen Xbox.
+
+To transfer games over Wi-Fi, enable **Settings → SSH** and connect with
+an SFTP client. Use the IP address and password in **Settings → About**,
+with username `root`.
+
+<details>
+<summary>Manually update the bundled core</summary>
+
+Download `hakux-<version>-aarch64.tar.gz` from the
+[Linux releases](https://github.com/portare-ch/hakuX-lr/releases) and extract
+it. Copy `hakux_libretro.so` and `hakux_libretro.info` from `lib/libretro/`
+to `/storage/cores/` on the device, creating the directory if needed, then
+restart.
+
+These files override the bundled core after OS updates too. Remove both
+and restart to restore the bundled version. Back up your
+[saves](#saves) before changing versions.
+
+</details>
+
+<a id="play-on-other-aarch64-linux-systems"></a>
+
+### RetroArch on other Linux systems
+
+Install a 64-bit RetroArch through your distribution. Release builds need
+**Vulkan 1.3**, glibc 2.38 or newer, libstdc++ from GCC 13 or newer, and zlib.
+Choose the archive for your CPU:
+
+| CPU | Release archive | Additional requirements |
+| --- | --- | --- |
+| ARM64 | `hakux-<version>-aarch64.tar.gz` | 64-bit ARM Linux |
+| AMD64 | `hakux-<version>-x86_64.tar.gz` | Linux 5.16 or newer and [KVM setup](#play-on-amd64-x86-64-linux-systems) |
+
+1. Download and extract the archive from the
+   [Linux releases](https://github.com/portare-ch/hakuX-lr/releases).
+2. In **Settings → Directory**, find RetroArch's **Cores** and **Core Info**
+   directories. Copy `lib/libretro/hakux_libretro.so` into Cores and
+   `lib/libretro/hakux_libretro.info` into Core Info.
+3. Set **Settings → Drivers → Video** to **vulkan**. Choose
+   **Main Menu → Configuration File → Save Current Configuration**, then
+   restart RetroArch.
+4. Choose **Load Core → Microsoft - Xbox (hakuX)**, then **Load Content**
+   and select your `.iso` or `.chd`.
+
+Set a writable **Settings → Directory → Save Files** location. Leave
+**save states, rewind and run-ahead off**; they are unsupported.
+
+<a id="play-on-amd64-x86-64-linux-systems"></a>
+
+#### AMD64: set up KVM first
+
+The AMD64 core runs Xbox code through Linux KVM. It needs **TSC scaling**
+and **UMIP** support (AMD Zen 2 or newer; Intel KVM can provide UMIP).
+
+1. Enable **Intel VT-x** or **AMD SVM / AMD-V** in BIOS/UEFI.
+2. Load the driver: `sudo modprobe kvm_intel` or `sudo modprobe kvm_amd`.
+3. Check `ls -l /dev/kvm`. If its group is `kvm`, give your user access:
+
+   ```sh
+   sudo usermod -aG kvm "$USER"
+   ```
+
+   Log out and back in, then confirm this prints `KVM access OK`:
+
+   ```sh
+   test -r /dev/kvm && test -w /dev/kvm && echo 'KVM access OK'
+   ```
+
+Sandboxed RetroArch installations also need access to `/dev/kvm`. The core
+logs missing CPU or KVM features when a game starts. Once KVM is ready,
+follow the [RetroArch installation steps above](#play-on-other-aarch64-linux-systems).
+
+## Game formats
+
+Use an Xbox **XISO** or **full disc dump (Redump)** with the `.iso`
+extension. DVD **CHD** images are also supported. To compress an ISO:
+
+```sh
+chdman createdvd -i "Game.iso" -o "Game.chd"
+```
+
+hakuX reads the CHD directly. Use `createdvd`; CD CHDs (`createcd`) and
+CHDs that require a parent image are unsupported.
+
+<a id="how-hakux-compares-with-xemu"></a>
+
+## How this differs from upstream hakuX and xemu
+
+This fork adds Linux builds, RetroArch integration and PortareOS packaging
+to [upstream hakuX](https://github.com/rfandango/hakuX), an ARM64 Android
+emulator. Both use hakuX's native core; the AMD64 KVM backend is an addition
+in this fork. For Android, use [upstream's releases](https://github.com/rfandango/hakuX/releases).
 
 This compares xemu's default configuration with this fork's Linux libretro
 builds. ARM64 and AMD64 refer to the host CPU.
@@ -37,7 +129,7 @@ builds. ARM64 and AMD64 refer to the host CPU.
 
 The native core reuses components adapted from xemu, including the
 [Xbox audio device](native/dev/apu/). The AMD64 build is experimental;
-see its [KVM requirements](#play-on-amd64-x86-64-linux-systems) below.
+see its [KVM requirements](#play-on-amd64-x86-64-linux-systems).
 
 For xemu's architecture and requirements, see its
 [project overview](https://xemu.app/docs/about/),
@@ -45,210 +137,77 @@ For xemu's architecture and requirements, see its
 [required files](https://xemu.app/docs/required-files/) and
 [graphics backends](https://github.com/xemu-project/xemu/blob/master/hw/xbox/nv2a/pgraph/meson.build).
 
-## Play on PortareOS
+## Controls
 
-1. **Install or update PortareOS.** Follow the
-   [installation guide](https://github.com/portare-ch/portareos/blob/next/documentation/INSTALLATION.md)
-   for a fresh installation. If you already use PortareOS, update through
-   **Settings → About → Update**, then restart.
-2. **Copy a game to `/storage/roms/xbox/`.** Use an Xbox `.iso` or a DVD
-   `.chd`. Extract ZIP or 7z archives first; keep the disc image intact.
-3. **Open Xbox in the launcher and select your game.** hakuX starts
-   automatically. If a newly copied game is missing, press **Home** to
-   return to the console list, then reopen Xbox.
+RetroArch ports 1–4 correspond to Xbox players 1–4. Face buttons follow
+their Xbox positions; **L1 = White**, **R1 = Black**, and **L2/R2 = triggers**.
+Remap buttons in **Quick Menu → Controls**. Enable vibration with
+**Quick Menu → Core Options → Rumble**; it is off by default.
 
-To copy files over Wi-Fi, enable **Settings → SSH**. In an SFTP client,
-connect to the IP address in **Settings → About**, with username `root`
-and the password shown there. Copy games to `/storage/roms/xbox/`.
+On PortareOS, **Home + Start** returns to the launcher.
+**Home + the top face button** opens RetroArch's Quick Menu.
 
-During a game, **Home + Start** returns to the launcher. **Home + the top
-face button** opens RetroArch's Quick Menu for controls and core options.
+## Picture and audio
 
-<details>
-<summary>Install a newer hakuX release before PortareOS includes it</summary>
+Open **Quick Menu → Core Options**. Close and reopen the game after
+changing options; **Crop Overscan** and **Rumble** apply immediately.
 
-1. Download `hakux-<version>-aarch64.tar.gz` from the latest `linux-v…`
-   [release](https://github.com/portare-ch/hakuX-lr/releases) and extract it.
-2. Inside the extracted folder, open `lib/libretro/`. Copy both
-   `hakux_libretro.so` and `hakux_libretro.info` to `/storage/cores/` on the
-   Nova, creating that directory if needed.
-3. Restart the Nova, then launch a game from Xbox as usual.
+| Setting | When to change it |
+| --- | --- |
+| **Render Scale** | Defaults to **2x**. Try **1x** for better performance; higher values need more GPU power. |
+| **Screen Format** | Choose **Widescreen** for games that support it. Set RetroArch's aspect ratio to **Core provided**. |
+| **Crop Overscan** | On by default to hide TV borders. Turn it off to show the full frame. |
+| **Audio Processing** | ARM64 defaults to **Full DSP (experimental)** for Xbox audio effects. Try **Fast** if audio crackles or the game runs slowly. AMD64 defaults to Fast; its DSP JIT is unavailable. |
+| **Audio Resampler** | ARM64 defaults to **Sinc** for higher quality. Try **Linear** to reduce CPU use. AMD64 always uses Linear. |
 
-These files override the bundled core even after OS updates. To restore
-the bundled version, remove both and restart. Back up
-`/storage/saves/xbox/hdd/` before changing versions; it holds your game saves.
+## Saves
 
-</details>
+Save inside the game, as on an Xbox. Saves are stored in `hdd/` under
+RetroArch's save directory: **`/storage/saves/xbox/hdd/` on PortareOS**.
+Back up that folder before moving devices or reinstalling. RetroArch save
+states are unavailable.
 
-## Play on other aarch64 Linux systems
+## Multiplayer
 
-Requires **64-bit ARM Linux**, glibc 2.38 or newer, libstdc++ from
-GCC 13 or newer, zlib, and a **Vulkan 1.3** GPU driver. Install RetroArch
-through your distribution.
+Set **Quick Menu → Core Options → Network**, then close and reopen the game.
 
-1. Download and extract `hakux-<version>-aarch64.tar.gz` from the latest
-   `linux-v…` [release](https://github.com/portare-ch/hakuX-lr/releases).
-2. In RetroArch, open **Settings → Directory** and note the **Cores** and
-   **Core Info** directories. From the archive's `lib/libretro/` folder,
-   copy `hakux_libretro.so` into Cores and `hakux_libretro.info` into
-   Core Info.
-3. Set **Settings → Drivers → Video** to **vulkan**. Save the configuration
-   through **Main Menu → Configuration File → Save Current Configuration**
-   and restart RetroArch.
-4. Choose **Load Core → Microsoft - Xbox (hakuX)**, then **Load Content**
-   and select your game's `.iso` or `.chd` file.
-
-Use the game's own save function. Save states, rewind and run-ahead are
-unsupported; leave them off. hakuX stores game saves in `hdd/` under
-RetroArch's save directory. Choose a writable directory under
-**Settings → Directory → Save Files**.
-
-## Play on AMD64 (x86-64) Linux systems
-
-Requires **64-bit Intel or AMD Linux**, kernel 5.16 or newer, glibc 2.38 or
-newer, libstdc++ from GCC 13 or newer, zlib, and a **Vulkan 1.3** GPU driver.
-Install a 64-bit RetroArch through your distribution.
-
-The AMD64 build runs Xbox code through **KVM**. The CPU and KVM must support
-**TSC scaling** and **UMIP** (AMD Zen 2 or newer; Intel KVM can provide
-UMIP). The core checks these features when starting a game and logs any
-missing requirement. This build is experimental; automated KVM and core
-tests pass, but real-game compatibility on AMD64 still needs testing.
-
-1. **Enable virtualization** in BIOS/UEFI: **Intel Virtualization
-   Technology (VT-x)** on Intel, or **SVM Mode (AMD-V)** on AMD.
-2. **Load KVM** for your CPU: `sudo modprobe kvm_intel` on Intel, or
-   `sudo modprobe kvm_amd` on AMD.
-3. **Give your user access to `/dev/kvm`.** Check `ls -l /dev/kvm`. If its
-   group is `kvm`, run the command below, then **log out and back in**:
-
-   ```sh
-   sudo usermod -aG kvm "$USER"
-   ```
-
-   Confirm that `test -r /dev/kvm && test -w /dev/kvm && echo 'KVM access OK'`
-   prints the message. If RetroArch is sandboxed, it must also have access
-   to `/dev/kvm`.
-4. Download and extract **`hakux-<version>-x86_64.tar.gz`** from the latest
-   `linux-v…` [release](https://github.com/portare-ch/hakuX-lr/releases).
-   The `aarch64` archive is for ARM64 devices.
-5. In RetroArch, open **Settings → Directory** and note the **Cores** and
-   **Core Info** directories. From the archive's `lib/libretro/` folder,
-   copy `hakux_libretro.so` into Cores and `hakux_libretro.info` into
-   Core Info.
-6. Set **Settings → Drivers → Video** to **vulkan**. Save through
-   **Main Menu → Configuration File → Save Current Configuration**, then
-   restart RetroArch.
-7. Choose **Load Core → Microsoft - Xbox (hakuX)**, then **Load Content**
-   and select your game's `.iso` or DVD `.chd` file.
-
-AMD64 uses linear audio resampling and defaults to **Audio Processing →
-Fast**; the ARM64 DSP JIT is unavailable. Use in-game saves in `hdd/` under
-RetroArch's save directory. Save states, rewind and run-ahead are
-unsupported; leave them off. See the
-[testing guide](TESTING.md#is-it-fex-the-same-game-under-kvm) to compare a
-game between AMD64 and ARM64.
-
-## Game formats
-
-Use an Xbox `.iso`: either an XISO or a full disc dump (Redump).
-
-To save space, convert an ISO to CHD with `chdman` on your computer:
-
-```sh
-chdman createdvd -i "Game.iso" -o "Game.chd"
-```
-
-Copy `Game.chd` to your games folder; hakuX reads it directly (0.6.0 or
-newer). Use **createdvd**. CD CHDs (`createcd`) and CHDs that need a parent
-image are unsupported.
-
-**BLACK** and **Burnout 3** have been tested on the Nova. Compatibility
-varies; other games may have bugs or fail to start.
-
-## Controls, picture, audio and saves
-
-- **Controllers:** RetroArch ports 1–4 are Xbox players 1–4. Face buttons
-  follow their Xbox positions. **L1 is White**, **R1 is Black**, and
-  **L2/R2 are the triggers**. Remap through **Quick Menu → Controls**.
-  **Rumble** is off by default: turn it on in **Quick Menu → Core
-  Options**.
-- **Picture:** open **Quick Menu → Core Options**. **Render Scale** is
-  **2x** by default. Higher values sharpen the picture but need more GPU
-  power; try **1x** if a game runs slowly.
-  Set **Screen Format: Widescreen** for games that support it, and use
-  RetroArch's **Core provided** aspect ratio. Close and reopen the game
-  after changing render scale, screen format, language, video region or
-  network. **Crop Overscan** changes immediately.
-- **Audio:** on ARM64, **Audio Resampler** defaults to **Sinc**, which
-  preserves more high-frequency detail and uses ARM NEON. Try **Linear**
-  if audio crackles or runs slowly, then close and reopen the game. AMD64
-  always uses linear resampling. **Audio Processing** defaults to
-  **Full DSP (experimental)** in ARM64 Linux releases, running the
-  game's Xbox reverb and other effects with a DSP JIT and stereo output.
-  Select **Fast** for a dry mix that uses less CPU if a game has audio or
-  performance problems. AMD64 defaults to **Fast**.
-  Close and reopen the game after changing it.
-- **System link:** to play a game's LAN mode across devices, set
-  **Network** to **LAN (system link)** in **Quick Menu → Core Options** on
-  each device, then close and reopen the game. Devices on the same Wi-Fi
-  discover each other over UDP port 3075. For devices on another subnet or
-  a VPN (Tailscale, ZeroTier), add their addresses to `lan-peers.txt`
-  in the save directory
-  (`/storage/saves/xbox/lan-peers.txt` on PortareOS): one per line, as `IP`
-  or `IP:PORT`. XLink Kai is unavailable in RetroArch.
-- **Xbox Live (Insignia):** set **Network** to **Xbox Live (Insignia)** and
-  restart the game to connect to [Insignia](https://insignia.live), the
-  revival of the original Xbox Live service. Register the console first
-  by running Insignia's Setup Assistant as a game. For account creation
-  or recovery, copy your Xbox dashboard files (`xboxdash.xbe` and its
-  folders) into `hdd/Partition2/` under RetroArch's save directory
-  (`/storage/saves/xbox/hdd/Partition2/` on PortareOS). Close the game,
-  select **Load Core → Microsoft - Xbox (hakuX) → Start Core**, and open
-  **Xbox Live** in the dashboard. Dashboard files are not included.
+- **LAN (system link):** enable it on every device, then use the game's LAN
+  mode. Discovery uses UDP port 3075. For another subnet or a VPN, add peers
+  to `lan-peers.txt` in RetroArch's save directory
+  (`/storage/saves/xbox/` on PortareOS), one `IP` or `IP:PORT` per line.
+- **Xbox Live (Insignia):** register the console with
+  [Insignia](https://insignia.live) using its Setup Assistant, then select this
+  network mode. Account setup needs your own Xbox dashboard files;
+  see the [dashboard setup](native/README.linux.md#the-libretro-core) and
+  [NAT / port forwarding guide](native/README.linux.md#insignia-nat).
   Dashboard navigation and end-to-end Insignia setup still need device
-  validation. If your provider blocks Insignia's DNS server, run
-  insigniaDNS on another computer and put its address in `insignia-dns.txt`
-  in the save directory (`/storage/saves/xbox/insignia-dns.txt` on
-  PortareOS).
-  For **Open NAT**, hakuX forwards the console's UDP 3074 through the
-  device's UDP 3074 and asks the router to forward it through UPnP. Enable
-  UPnP on the router or forward UDP 3074 to the device manually. If the
-  device has a firewall, allow inbound UDP 3074 so peers can reach the
-  console. Only one console behind the same router can use external UDP
-  3074. Advanced overrides: `natport=`, `upnp=` and `upnplease=`; see
-  [NAT options](native/README.linux.md#insignia-nat).
-- **Saving:** save inside the game, as on an Xbox. On PortareOS, your saves
-  live in `/storage/saves/xbox/hdd/`. Back up that folder to keep them when
-  moving or reinstalling. RetroArch save states are not available.
+  validation.
 
-## If something goes wrong
+XLink Kai is unavailable in RetroArch.
+
+## Troubleshooting
 
 | Problem | What to try |
 | --- | --- |
-| Xbox or a game is missing from the PortareOS launcher | Check that the file is in `/storage/roms/xbox/` and ends in `.iso` or `.chd`. Extract ZIP/7z archives. Return to the console list with Home. Update PortareOS if CHDs are missing. |
-| RetroArch cannot find hakuX | Check that both release files were copied into the directories above, then restart. |
-| The game is slow or the picture is black | On other Linux systems, select the **vulkan** video driver and restart RetroArch. Try **Render Scale: 1x**. |
-| A game will not start on AMD64 | Check virtualization in BIOS/UEFI, your read/write access to `/dev/kvm`, and the log for missing TSC scaling or UMIP support. |
-| The game asks for a controller | Open **Quick Menu → Controls → Port 1 Controls** and set **Device Type** to **Xbox Controller**. A port set to None is unplugged. |
-| A game fails to start | Try an XISO image and the latest core. For a CHD, check that it was made with `createdvd`. If it still fails, report it below. |
+| Game missing from the PortareOS launcher | Check `/storage/roms/xbox/`, extract archives, and return to the console list with Home. Update PortareOS if CHDs are missing. |
+| Core missing in RetroArch | Check the Cores and Core Info directories, copy both release files, then restart. |
+| Slow game or black picture | Select the **vulkan** video driver and restart RetroArch. Try **Render Scale: 1x** and **Audio Processing: Fast**. |
+| AMD64 game will not start | Check [KVM setup](#play-on-amd64-x86-64-linux-systems) and the log for missing TSC scaling or UMIP. |
+| Game asks for a controller | Set **Quick Menu → Controls → Port 1 Controls → Device Type** to **Xbox Controller**. None disconnects the port. |
+| Game fails to start | Try the latest core and an XISO. For CHD, check that it was made with `createdvd`. |
 
-Still stuck? [Open an issue](https://github.com/portare-ch/hakuX-lr/issues)
-with the game and region, hakuX version, device and OS, and what happened.
-On PortareOS, copy `/var/log/exec.log` and
-`/var/log/retroarch/retroarch.log` **before starting another game**.
-[The testing guide](TESTING.md#logs) explains collecting logs in more detail.
+[Report an issue](https://github.com/portare-ch/hakuX-lr/issues) with the game
+and region, core version, device, OS, and what happened. On PortareOS,
+collect `/var/log/exec.log` and `/var/log/retroarch/retroarch.log` **before
+starting another game**. See [collecting logs](TESTING.md#logs) for details.
 
-## Development and credits
+## Development and license
 
 [Build for Linux](native/README.linux.md) · [Testing](TESTING.md) ·
 [Changelog](CHANGELOG.md)
 
-This is the PortareOS Linux fork of
-[rfandango/hakuX](https://github.com/rfandango/hakuX), whose authors made
-the emulator core and Android app. For Android, see the upstream project;
-this fork's [Android build notes](android/README.md) are retained for
-development and are not validated here.
+The upstream hakuX authors made the emulator core and Android app.
+This fork maintains the Linux and libretro integration.
 
-GNU GPL v3 or later ([COPYING](COPYING)). Third-party code retains its own
-licenses; see [LICENSE](LICENSE) and [licenses/](licenses/).
+GNU GPL v3 or later ([COPYING](COPYING)). Third-party licenses are listed
+in [LICENSE](LICENSE) and [licenses/](licenses/).
