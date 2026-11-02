@@ -2,14 +2,41 @@
 
 ## Unreleased
 
+## linux-v0.17.2 (Linux, aarch64 and x86-64)
+
 ### Fixes
 
+- **AMD64 movie playback** — Preserve MMX and SSE registers when switching
+  guest threads. This fixes the partially black intro videos in Burnout 3
+  caused by the KVM backend losing the decoder's alpha mask.
 - **Vulkan image lifetime** — Wait for the shared queue before replacing
   export images after a frame-size or sync-mask change. This prevents
   freeing images still in use after RetroArch rebuilds its swapchain.
   Steady-state rendering adds no wait.
+- **Vulkan device setup** — Enable the mirror-clamp sampling feature when
+  supported, matching the extension RetroArch enables for its samplers.
+  This resolves the related Vulkan validation error during device creation.
 - **Updated libretro headers** — Match RetroArch `11e8931021`, now used by
   PortareOS.
+
+### Setup and documentation
+
+- **Linux setup script** — `tools/linux/setup-hakux.sh` installs RetroArch,
+  downloads the latest stable core for the CPU, and creates a separate
+  configuration and game launcher. It checks KVM access on AMD64 and
+  supports desktop and direct-display use. The launcher accepts file names
+  or partial names and keeps separate core and RetroArch logs.
+- **README** — Simplify the installation instructions and architecture
+  comparison, explain the settings in plain language, and document where
+  to find logs.
+
+### Testing
+
+- Add a regression check for MMX and SSE state restored over an initial
+  FPU state. On the AMD64 test machine, Burnout 3's intro plays without the
+  black rows, and Dead or Alive 3 reaches its attract mode at 60 fps.
+- Make repeated-load memory checks distinguish allocated memory from
+  heap space retained by glibc, avoiding false leak reports with RADV.
 
 ## linux-v0.17.1 (Linux, aarch64 and x86-64)
 
