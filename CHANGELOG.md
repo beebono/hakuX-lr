@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Fixes
+
+- **Vulkan image lifetime** — Wait for the shared queue before replacing
+  export images after a frame-size or sync-mask change. This prevents
+  freeing images still in use after RetroArch rebuilds its swapchain.
+  Steady-state rendering adds no wait.
+- **Updated libretro headers** — Match RetroArch `11e8931021`, now used by
+  PortareOS.
+
 ## linux-v0.17.1 (Linux, aarch64 and x86-64)
 
 ### Fixes
