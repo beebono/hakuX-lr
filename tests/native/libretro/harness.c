@@ -360,6 +360,39 @@ static long status_kib(const char *key)
     return v;
 }
 
+/* The [heap] mapping (brk), in KiB. glibc gives it back only from its top,
+ * so it stays at its high-water mark, which depends on how the threads'
+ * allocations interleave: counted apart from the other mappings, and what
+ * malloc holds measured instead (malloc_kib). */
+static long heap_kib(void)
+{
+    FILE *f = fopen("/proc/self/maps", "r");
+    char line[PATH_MAX + 128];
+    long kib = 0;
+    while (f && fgets(line, sizeof(line), f)) {
+        unsigned long lo, hi;
+        if (strstr(line, "[heap]") && sscanf(line, "%lx-%lx", &lo, &hi) == 2) {
+            kib += (long)((hi - lo) / 1024);
+        }
+    }
+    if (f) {
+        fclose(f);
+    }
+    return kib;
+}
+
+/* What malloc has handed out and not had back, in KiB: every arena's blocks
+ * in use and its mapped ones (glibc 2.33's mallinfo2); -1 without it. */
+static long malloc_kib(void)
+{
+#if defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 33))
+    const struct mallinfo2 mi = mallinfo2();
+    return (long)((mi.uordblks + mi.hblkhd) / 1024);
+#else
+    return -1;
+#endif
+}
+
 /* Whether the core's library is still mapped (after dlclose: unloaded). */
 static bool core_mapped(void)
 {
@@ -614,9 +647,11 @@ int main(int argc, char **argv)
             if (threads > 1) {
                 name_threads(c + 1);
             }
-            printf("cycle %d: %ld threads, %ld descriptors, VmSize %ld KiB, VmRSS %ld KiB, signals caught %s, %s\n",
+            printf("cycle %d: %ld threads, %ld descriptors, VmSize %ld KiB, VmRSS %ld KiB, heap %ld KiB, "
+                   "malloc %ld KiB, signals caught %s, %s\n",
                    c + 1, threads, count_dir("/proc/self/fd"), status_kib("VmSize:"), status_kib("VmRSS:"),
-                   caught_signals(), core_mapped() ? "the core still mapped" : "the core unloaded");
+                   heap_kib(), malloc_kib(), caught_signals(),
+                   core_mapped() ? "the core still mapped" : "the core unloaded");
             fflush(stdout);
             if (getenv("HARNESS_MAPS")) {   /* debug: the mappings after each cycle, to a file */
                 char cmd[256];
