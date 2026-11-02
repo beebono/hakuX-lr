@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 /* The VP's own stereo mix for 2D voices (native/dev/apu/vp/stereo_route.h,
  * which vp.c's voice_process calls): the route a voice's sends ask for, and
  * each send's gain into the speakers, the centre and back bins by the

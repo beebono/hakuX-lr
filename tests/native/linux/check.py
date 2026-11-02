@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026-present PortareOS
 """Run positive/negative platform checks and generate copyright-free XISO fixtures."""
 import argparse
 import os

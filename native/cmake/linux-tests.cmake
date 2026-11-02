@@ -1,3 +1,4 @@
+# Copyright (C) 2026-present PortareOS
 # Tests that run guest code run on x86-64 under KVM (/dev/kvm) too.
 set(NC_GUEST_TESTS ON)
 set(NC_LIBRETRO_GUEST_TESTS ON)

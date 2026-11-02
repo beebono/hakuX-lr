@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 #include "native/core/core.h"
 #include "native/core/mmio.h"
 #include "native/hle/hle_native.h"

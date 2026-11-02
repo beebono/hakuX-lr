@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 /*
  * hakuX native core — the APU's output in the libretro core: 48 kHz 16-bit
  * stereo, handed to RetroArch from retro_run.

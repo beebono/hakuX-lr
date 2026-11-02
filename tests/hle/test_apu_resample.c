@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 /* The voices' resamplers (native/dev/apu/vp/resample.h) measured: linear,
  * and band-limited sinc (resample_sinc.c) where the host is AArch64. Their
  * input comes from a callback 32 stereo frames at a time, as the VP feeds

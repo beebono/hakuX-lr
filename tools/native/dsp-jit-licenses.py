@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026-present PortareOS
 """Collect the pinned Rust workspace's license notices for the Linux archive."""
 import argparse
 import json

@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 /*
  * hakuX libretro Vulkan output (LIBRETRO_SPEC.md section 7).
  *

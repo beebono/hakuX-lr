@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 /*
  * kms-grab — what the panel shows, as a PNG: the framebuffer an active KMS
  * plane scans out, read back through its dma-buf (root, beside whoever is

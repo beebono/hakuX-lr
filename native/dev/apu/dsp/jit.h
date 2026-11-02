@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 /* DSP56300 JIT bridge; the C interpreter remains available in every build. */
 #ifndef NATIVE_APU_DSP_JIT_H
 #define NATIVE_APU_DSP_JIT_H

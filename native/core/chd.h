@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 /*
  * hakuX native core — CHD disc images (MAME's compressed hunks of data, made
  * by chdman createdvd), read through libchdr: the image's bytes as an ISO's.

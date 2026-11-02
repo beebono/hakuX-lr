@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 /* The native bridge over the real AArch64 DSP56300 JIT. No guest title or
  * sound device: standalone DSP programs and the APU's parked frame thread. */
 #include "apu_fixture.h"

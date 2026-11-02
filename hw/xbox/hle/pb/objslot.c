@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 /*
  * hakuX HLE GPU — push-buffer mode's surface object slots (objslot.h).
  */

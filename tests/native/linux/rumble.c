@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 /* The libretro core's rumble (native/libretro/input.c) with the real
  * controller (native/dev/xid.c): a title's rumble report reaches RetroArch's
  * motors only with the core option on, each strength once, and they stop

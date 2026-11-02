@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 #include "native/dev/apu/apu_int.h"
 #include <stdio.h>
 

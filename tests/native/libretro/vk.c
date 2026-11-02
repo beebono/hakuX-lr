@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 /*
  * hakuX libretro core — the harness's Vulkan frontend (harness.c,
  * HARNESS_VULKAN=1), as RetroArch's vulkan driver is to the core, without a

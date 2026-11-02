@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026-present PortareOS
 """Fetch/verify the pinned day-one sources without modifying external/fex."""
 import argparse
 import json

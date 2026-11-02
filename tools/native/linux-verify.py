@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026-present PortareOS
 """Check build/package/hakux-<version>-<architecture>.tar.gz after linux-package.sh,
 in the image that built it, and write its .sha256: the commit's archive, an
 native core that reports the version and loads (retro_* exports only, no

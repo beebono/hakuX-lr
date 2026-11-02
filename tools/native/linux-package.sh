@@ -1,4 +1,5 @@
 #!/bin/sh
+# Copyright (C) 2026-present PortareOS
 # PortareOS's hakux-lr package's input: the libretro core with its core
 # info, stripped, with the licences and the revisions it was built from, as
 # build/package/hakux-<version>-<architecture>.tar.gz.

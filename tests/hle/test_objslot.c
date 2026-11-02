@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 #include "hw/xbox/hle/pb/objslot.h"
 #include "hle_test.h"
 

@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 /*
  * hakuX native core — the libretro core's network (native/net), the Network
  * option: off, LAN (system link with the consoles on this network) or Xbox

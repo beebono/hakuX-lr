@@ -1,4 +1,5 @@
 #!/bin/sh
+# Copyright (C) 2026-present PortareOS
 # The x86-64 Linux build and its checks (#56), in the hakux-linux image
 # built for amd64, as CI runs them (.github/workflows/linux.yml): the core
 # with the KVM backend (HAKUX_CPU=kvm) and its tests (linux-build.sh), and

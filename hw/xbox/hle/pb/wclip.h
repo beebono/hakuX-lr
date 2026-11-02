@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 /*
  * hakuX HLE GPU — push-buffer mode's window clip (SET_WINDOW_CLIP_*) as
  * disjoint rectangles: the back end records a draw once in each, scissored

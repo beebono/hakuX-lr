@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 /*
  * hakuX native core, libretro front end (hakux_libretro.so): RetroArch runs
  * the game (LIBRETRO_SPEC.md).
