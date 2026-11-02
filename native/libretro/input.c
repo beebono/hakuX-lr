@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 /*
  * hakuX native core — the RetroPad as the Duke, in the libretro core.
  *

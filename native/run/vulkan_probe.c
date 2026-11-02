@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 #include "native/core/nc.h"
 #include "hw/xbox/hle/vk/vkdev.h"
 

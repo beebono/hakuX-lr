@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 /*
  * hakuX native core — the libretro core's Vulkan (LIBRETRO_SPEC.md section 7):
  * the renderer on RetroArch's instance and device, and each frame handed to

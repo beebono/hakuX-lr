@@ -1,3 +1,4 @@
+# Copyright (C) 2026-present PortareOS
 # libchdr (NC_DEPS/libchdr, rtissera/libchdr, BSD-3-Clause): CHD disc images
 # (core/chd.c). Its codecs over the system zlib, its own LZMA (with the arm64
 # decoder), zstd and dr_flac. Without it the core reads ISO images only.

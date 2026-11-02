@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 /*
  * hakuX native core — the voices' band-limited resampler, resample.h's sinc
  * (resample_sinc.c): AArch64 only, its taps through NEON. Elsewhere

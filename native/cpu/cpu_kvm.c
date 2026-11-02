@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 /*
  * hakuX native core — the guest CPU on x86-64 Linux through KVM (#56).
  *

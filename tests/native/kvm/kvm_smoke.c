@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 /*
  * The KVM backend's first milestone (#56): each thing the backend does,
  * with guest code written for it and a system-op callback that records

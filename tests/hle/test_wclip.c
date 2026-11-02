@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 #include "hw/xbox/hle/pb/wclip.h"
 #include "hle_test.h"
 

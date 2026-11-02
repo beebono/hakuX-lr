@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026-present PortareOS
 """Check the libretro core: its exports, its info, and a synthetic title run through it."""
 import argparse
 import os

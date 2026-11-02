@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 /* Every command the back end records through its device table (T.vkCmd*)
  * goes through the strip batch's wrapper (vk/batch_wrap.h), which records
  * a held run of strips first: a command without one reaches the command

@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 /*
  * nat-smoke (native/cmake/linux-tests.cmake): exercise NAT with console
  * Ethernet frames and a fake UPnP router on 127.0.0.1.

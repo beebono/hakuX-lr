@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 #ifndef NATIVE_PLATFORM_PROPERTIES_H
 #define NATIVE_PLATFORM_PROPERTIES_H
 

@@ -1,4 +1,5 @@
 #!/bin/sh
+# Copyright (C) 2026-present PortareOS
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)

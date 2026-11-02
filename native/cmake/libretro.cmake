@@ -1,3 +1,4 @@
+# Copyright (C) 2026-present PortareOS
 # The libretro core (native/libretro, LIBRETRO_SPEC.md): hakux_libretro.so,
 # for RetroArch. Everything linked in stays hidden: it exports the libretro
 # ABI (retro_*) only, and needs no SDL. Every static library in it is PIC

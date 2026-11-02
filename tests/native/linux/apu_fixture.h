@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 /* The native APU tests' fixture (apu_stereo.c, apu_resample.c): an APU over
  * a guest RAM of its own, voices set up and started by the PIO methods
  * DirectSound sends (mcpx_apu_vp_write), their samples read through an

@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 /* hakux_libretro.so exports the libretro ABI and nothing else. */
 {
   global: retro_*;

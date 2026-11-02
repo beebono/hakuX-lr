@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 /*
  * hakuX libretro core — a minimal frontend for its checks (check.py).
  *

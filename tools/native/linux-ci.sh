@@ -1,4 +1,5 @@
 #!/bin/sh
+# Copyright (C) 2026-present PortareOS
 # The Linux release build and its checks, in the hakux-linux image
 # (Dockerfile.linux), as CI runs them (.github/workflows/linux.yml): the
 # pinned sources, the core and its tests (linux-build.sh), the package

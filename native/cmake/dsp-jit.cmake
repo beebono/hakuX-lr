@@ -1,3 +1,4 @@
+# Copyright (C) 2026-present PortareOS
 # The pinned dsp56300 C FFI, compiled for the same AArch64 Linux host.
 if(ANDROID OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR
    NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")

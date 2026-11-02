@@ -1,3 +1,4 @@
+/* Copyright (C) 2026-present PortareOS */
 /* Paced silent output for Linux diagnostics. The emulated APU stays active. */
 #include "native/dev/apu/apu_int.h"
 
