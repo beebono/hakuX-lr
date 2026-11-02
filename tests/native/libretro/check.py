@@ -101,7 +101,8 @@ def cycles(command, env, n, expect=None):
                             env=dict(env, HARNESS_CYCLES=str(n), MALLOC_ARENA_MAX='1'), capture_output=True,
                             text=True, timeout=300)
     rows = [tuple(int(v) for v in m) for m in re.findall(
-        r'cycle \d+: (\d+) threads, (\d+) descriptors, VmSize (\d+) KiB, VmRSS (\d+) KiB', result.stdout)]
+        r'cycle \d+: (\d+) threads, (\d+) descriptors, VmSize (\d+) KiB, VmRSS (\d+) KiB, heap (\d+) KiB, '
+        r'malloc (-?\d+) KiB', result.stdout)]
     stops = result.stdout.count('the core stopped in') + result.stderr.count('the core stopped in')
     before = re.findall(r'signals caught before the core: (\w+)', result.stdout)
     caught = re.findall(r'cycle \d+: .*, signals caught (\w+)', result.stdout)
@@ -114,13 +115,22 @@ def cycles(command, env, n, expect=None):
     if left or len(caught) != n:
         raise SystemExit(f'FAIL: {n} cycles of {command[2]} left signal handlers behind: SigCgt '
                          f'{before[0] if before else "?"} before the core, {left} after a cycle')
+    # Mappings as VmSize without the heap, whose size is its high-water mark
+    # (glibc trims only its top): on RADV it grew ~5.8 MiB once, at the
+    # first, second or third cycle as the driver's threads and glslang's
+    # symbol tables happened to interleave, then stayed. What malloc holds
+    # (mallinfo2, -1 without it) stands for the heap.
     first, last = rows[1], rows[-1]
-    if last[0] != first[0] or last[1] != first[1] or last[2] - first[2] > 4096 or last[3] - first[3] > 64 * 1024:
+    mapped = last[2] - last[4] - (first[2] - first[4])
+    held = last[5] - first[5] if first[5] >= 0 and last[5] >= 0 else 0
+    if (last[0] != first[0] or last[1] != first[1] or mapped > 4096 or held > 4096
+            or last[3] - first[3] > 64 * 1024):
         raise SystemExit(f'FAIL: {n} cycles of {command[2]} left something behind: {first} then {last} '
-                         '(threads, descriptors, VmSize KiB, VmRSS KiB)')
+                         '(threads, descriptors, VmSize KiB, VmRSS KiB, heap KiB, malloc KiB)')
     print(f'PASS: {n} cycles of {Path(command[2]).name} in one process, after each {last[0]} thread(s), '
-          f'{last[1]} descriptor(s) and the signal handlers as before the core; VmSize {first[2]} to {last[2]} '
-          f'KiB, VmRSS {first[3]} to {last[3]} KiB')
+          f'{last[1]} descriptor(s) and the signal handlers as before the core; mappings but the heap '
+          f'{first[2] - first[4]} to {last[2] - last[4]} KiB, malloc {first[5]} to {last[5]} KiB, '
+          f'VmRSS {first[3]} to {last[3]} KiB')
 
 
 def xbe_of(image):
