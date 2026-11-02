@@ -108,6 +108,9 @@ struct NcCpu {
     int kvm, vmfd, vcpu;
     struct kvm_run *run;
     size_t run_size;
+    struct kvm_xsave *xsave; /* fpu_get / fpu_set's buffer; NULL: KVM_GET/SET_FPU */
+    size_t xsave_size;
+    bool xsave2;           /* KVM_GET_XSAVE2 reads it (larger than struct kvm_xsave) */
     uint8_t *sys;          /* host view of SYS_GPA */
     uint32_t fs_base;
     struct kvm_sregs sregs; /* the ring-3 state's, CR3 the current directory */
@@ -486,6 +489,22 @@ NcCpu *nc_cpu_create(const NcCpuConfig *cfg, uint32_t fs_base)
     if (!set_cpuid(cpu)) {
         return refuse(cpu, "KVM_SET_CPUID2"), NULL;
     }
+    /* the FPU through the XSAVE area (fpu_get, fpu_set), sized once the
+     * guest's CPUID is set */
+    if (ioctl(cpu->kvm, KVM_CHECK_EXTENSION, KVM_CAP_XSAVE) > 0) {
+        cpu->xsave_size = sizeof(struct kvm_xsave);
+#ifdef KVM_CAP_XSAVE2
+        const int xs = ioctl(cpu->vmfd, KVM_CHECK_EXTENSION, KVM_CAP_XSAVE2);
+        if (xs > (int)sizeof(struct kvm_xsave)) {
+            cpu->xsave_size = (size_t)xs;
+            cpu->xsave2 = true;
+        }
+#endif
+        cpu->xsave = calloc(1, cpu->xsave_size);
+        if (!cpu->xsave) {
+            return refuse(cpu, "the XSAVE buffer"), NULL;
+        }
+    }
     const int khz = ioctl(cpu->vcpu, KVM_GET_TSC_KHZ, 0);
     if (khz <= 0 || ioctl(cpu->vcpu, KVM_SET_TSC_KHZ, GUEST_KHZ) < 0) {
         return refuse(cpu, "KVM_SET_TSC_KHZ 733333"), NULL;
@@ -557,6 +576,7 @@ void nc_cpu_destroy(NcCpu *cpu)
     if (cpu->sys) {
         munmap(cpu->sys, SYS_SIZE);
     }
+    free(cpu->xsave);
     free(cpu);
 }
 
@@ -639,13 +659,88 @@ void nc_context_import(NcCpuContext *c, const NcCpuState *s)
     k->fpu.ftwx = s->ftw;
 }
 
+/* ------------------------------------------------------------ the FPU */
+
+/* The vCPU's x87, MMX and SSE registers, through its XSAVE area. KVM_GET_FPU
+ * and KVM_SET_FPU copy only the area's legacy part and leave its header as
+ * the last save made it: after a guest thread whose x87 or SSE state was in
+ * its initial configuration (XSTATE_BV's bit clear), the state set for the
+ * next thread was dropped at the next entry, its registers initialized
+ * (zero), and the state read back stale. Burnout 3's XMV decoder lost the
+ * MMX register holding its alpha mask so mid-frame: the rest of the movie
+ * frame alpha 0, drawn transparent over black. Here the header says both
+ * are set, so the next entry loads them. */
+enum { XS_FCW = 0, XS_FSW = 2, XS_FTW = 4, XS_FOP = 6, XS_FIP = 8, XS_FDP = 16, XS_MXCSR = 24,
+       XS_ST = 32, XS_XMM = 160, XS_BV = 512 };
+#define XFEATURE_X87_SSE 3u
+
+static bool xsave_read(NcCpu *cpu)
+{
+#ifdef KVM_GET_XSAVE2
+    if (cpu->xsave2) {
+        return ioctl(cpu->vcpu, KVM_GET_XSAVE2, cpu->xsave) == 0;
+    }
+#endif
+    return ioctl(cpu->vcpu, KVM_GET_XSAVE, cpu->xsave) == 0;
+}
+
+static bool fpu_get(NcCpu *cpu, struct kvm_fpu *f)
+{
+    if (!cpu->xsave) {
+        return ioctl(cpu->vcpu, KVM_GET_FPU, f) == 0;
+    }
+    if (!xsave_read(cpu)) {
+        return false;
+    }
+    /* the legacy part as KVM_GET_XSAVE gives it: a component in its
+     * initial state reads as that state */
+    const uint8_t *b = (const uint8_t *)cpu->xsave->region;
+    memset(f, 0, sizeof(*f));
+    memcpy(&f->fcw, b + XS_FCW, 2);
+    memcpy(&f->fsw, b + XS_FSW, 2);
+    f->ftwx = b[XS_FTW];
+    memcpy(&f->last_opcode, b + XS_FOP, 2);
+    memcpy(&f->last_ip, b + XS_FIP, 8);
+    memcpy(&f->last_dp, b + XS_FDP, 8);
+    memcpy(&f->mxcsr, b + XS_MXCSR, 4);
+    memcpy(f->fpr, b + XS_ST, sizeof(f->fpr));
+    memcpy(f->xmm, b + XS_XMM, sizeof(f->xmm));
+    return true;
+}
+
+static bool fpu_set(NcCpu *cpu, const struct kvm_fpu *f)
+{
+    if (!cpu->xsave) {
+        return ioctl(cpu->vcpu, KVM_SET_FPU, f) == 0;
+    }
+    /* the other components (and their header bits) as they are */
+    if (!xsave_read(cpu)) {
+        return false;
+    }
+    uint8_t *b = (uint8_t *)cpu->xsave->region;
+    memcpy(b + XS_FCW, &f->fcw, 2);
+    memcpy(b + XS_FSW, &f->fsw, 2);
+    b[XS_FTW] = f->ftwx;
+    memcpy(b + XS_FOP, &f->last_opcode, 2);
+    memcpy(b + XS_FIP, &f->last_ip, 8);
+    memcpy(b + XS_FDP, &f->last_dp, 8);
+    memcpy(b + XS_MXCSR, &f->mxcsr, 4);
+    memcpy(b + XS_ST, f->fpr, sizeof(f->fpr));
+    memcpy(b + XS_XMM, f->xmm, sizeof(f->xmm));
+    uint64_t bv;
+    memcpy(&bv, b + XS_BV, 8);
+    bv |= XFEATURE_X87_SSE;
+    memcpy(b + XS_BV, &bv, 8);
+    return ioctl(cpu->vcpu, KVM_SET_XSAVE, cpu->xsave) == 0;
+}
+
 /* ------------------------------------------------------------ frames */
 
 static void frame_fpu(NcFrame *f)
 {
     if (!f->fpu_valid) {
-        if (ioctl(f->cpu->vcpu, KVM_GET_FPU, &f->fpu) < 0) {
-            fatal(f->cpu, "KVM_GET_FPU");
+        if (!fpu_get(f->cpu, &f->fpu)) {
+            fatal(f->cpu, "reading the FPU");
         }
         f->fpu_valid = true;
     }
@@ -769,8 +864,8 @@ static void frame_write(NcCpu *cpu)
     if (ioctl(cpu->vcpu, KVM_SET_REGS, &r) < 0) {
         fatal(cpu, "KVM_SET_REGS");
     }
-    if (f->fpu_dirty && ioctl(cpu->vcpu, KVM_SET_FPU, &f->fpu) < 0) {
-        fatal(cpu, "KVM_SET_FPU");
+    if (f->fpu_dirty && !fpu_set(cpu, &f->fpu)) {
+        fatal(cpu, "setting the FPU");
     }
     f->fpu_dirty = false;
 }
@@ -1258,7 +1353,7 @@ static void load_context(NcCpu *cpu, const NcCpuContext *c)
     r.rip = (uint32_t)f->rip;
     r.rsp = (uint32_t)f->regs[NC_ESP];
     r.rflags = (f->eflags | EFL_IOPL | 2) & ~EFL_TF;
-    if (ioctl(cpu->vcpu, KVM_SET_REGS, &r) < 0 || ioctl(cpu->vcpu, KVM_SET_FPU, &f->fpu) < 0) {
+    if (ioctl(cpu->vcpu, KVM_SET_REGS, &r) < 0 || !fpu_set(cpu, &f->fpu)) {
         fatal(cpu, "loading the context");
     }
     f->fpu_dirty = false;
