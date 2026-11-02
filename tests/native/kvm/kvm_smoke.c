@@ -293,6 +293,32 @@ int main(void)
     check(reports[8] == 0xDEADBEEFu && mmio_reg == 0xDEADBEEFu, "MMIO: a write, then a read of it");
     check(reports[9] == 0 && late_faults == 1, "a page fault: mapped by the fault path, the access run again");
 
+    /* MMX and SSE registers loaded while the vCPU's saved FPU state is in
+     * its initial configuration (no guest code above used them): through
+     * KVM_SET_FPU they were dropped at the next entry, the XSAVE header
+     * saying x87 and SSE were initial, and the guest read zeros (Burnout 3's
+     * XMV decoder lost its alpha mask so after a thread switch). */
+    const uint8_t fpregs[] = {
+        0x0F, 0x7E, 0xF8, 0xCD, 0x42,       /* movd eax, mm7; int 42h */
+        0x66, 0x0F, 0x7E, 0xC8, 0xCD, 0x42, /* movd eax, xmm1; int 42h */
+        0x0F, 0x77, 0xF4,                   /* emms; hlt */
+    };
+    put(CODE + 0xA00, fpregs, sizeof(fpregs));
+    {
+        NcCpuContext c;
+        NcCpuState st;
+        nc_context_init(cpu, &c, CODE + 0xA00, DATA + 0xF00);
+        nc_context_export(&c, &st);
+        const uint32_t mm7 = 0x77777777u, xmm1 = 0x11223344u;
+        memcpy(st.mm[7], &mm7, 4);
+        memcpy(st.xmm[1], &xmm1, 4);
+        nc_context_import(&c, &st);
+        nreports = 0;
+        nc_cpu_run(cpu, &c);
+    }
+    check(nreports == 2 && reports[0] == 0x77777777u && reports[1] == 0x11223344u,
+          "MMX and SSE registers set over an initial FPU state: the guest reads them");
+
     /* A thread switch inside a trapped kernel call (int 41h). */
     const uint8_t thread_a[] = {
         0xBB, 0xAA, 0xAA, 0x00, 0x00,       /* mov ebx, 0AAAAh */
