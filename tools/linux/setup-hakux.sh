@@ -394,6 +394,8 @@ EOF
     done
     cat <<EOF
 
+# RetroArch writes its log file only with verbose logging on
+log_verbosity = "true"
 log_to_file = "true"
 log_to_file_timestamp = "false"
 
@@ -450,11 +452,12 @@ cat > "$prefix/start-hakux.sh" <<'LAUNCHER'
 #
 #   start-hakux.sh [--windowed] [--verbose] [<game> | <part of its name>]
 #
-# A game is an .iso or .chd file, or part of a file name in the games
-# folder ("burnout"). Without one, RetroArch's menu opens: Load Content
-# browses the games folder. Without a display server (no WAYLAND_DISPLAY or
-# DISPLAY) RetroArch draws straight through KMS. HAKUX_DISPLAY=kms or
-# desktop overrides that.
+# A game is an .iso or .chd file, or a file name in the games folder, whole
+# or in part, with or without its extension ("burnout"). Without one,
+# RetroArch's menu opens: Load Content browses the games folder. Without a
+# display server (no WAYLAND_DISPLAY or DISPLAY) RetroArch draws straight
+# through KMS. HAKUX_DISPLAY=kms or desktop overrides that. The core's
+# diagnostics go to logs/hakux.log, RetroArch's to logs/retroarch.log.
 set -eu
 
 here=$(CDPATH='' cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd)
@@ -483,10 +486,27 @@ if [ $# -eq 1 ]; then
     if [ -f "$1" ]; then
         game=$(readlink -f -- "$1")
     else
-        # a space or underscore matches either ("burnout 3": Burnout_3_-_Takedown)
-        pat=$(printf '%s' "$1" | tr ' _' '??')
+        # a name in the games folder, whole or in part, its extension
+        # optional; the name's own wildcards literal, a space or underscore
+        # matching either ("burnout 3": Burnout_3_-_Takedown)
+        name=$1
+        case $name in
+            *.[iI][sS][oO]|*.[cC][hH][dD]) name=${name%.*} ;;
+        esac
+        pat=$(printf '%s' "$name" | sed 's/[][*?\\]/\\&/g' | tr ' _' '??')
         matches=$(find "$GAMES" -maxdepth 2 -type f \( -iname "*$pat*.iso" -o -iname "*$pat*.chd" \) 2>/dev/null | sort)
         n=$(printf '%s' "$matches" | grep -c . || true)
+        if [ "$n" -gt 1 ]; then
+            # the one whose whole name it is ("halo": Halo.iso, not Halo 2.iso)
+            want=$(printf '%s' "$name" | tr 'A-Z _' 'a-z__')
+            exact=$(printf '%s\n' "$matches" | while IFS= read -r m; do
+                b=${m##*/}
+                [ "$(printf '%s' "${b%.*}" | tr 'A-Z _' 'a-z__')" != "$want" ] || printf '%s\n' "$m"
+            done)
+            if [ "$(printf '%s' "$exact" | grep -c . || true)" = 1 ]; then
+                matches=$exact n=1
+            fi
+        fi
         case $n in
             0) die "no game matching \"$1\" in $GAMES" ;;
             1) game=$matches ;;
@@ -554,8 +574,14 @@ fi
 set -- --config "$here/retroarch.cfg" --appendconfig "$session|$here/user.cfg"
 [ $verbose = 0 ] || set -- "$@" --verbose
 [ -z "$game" ] || set -- "$@" -L "$here/cores/hakux_libretro.so" "$game"
-echo "start-hakux: ${game:-RetroArch menu} ($mode, $audio); log in $here/logs/retroarch.log"
-exec "$RETROARCH" "$@"
+# hakuX writes its diagnostics to stderr, which RetroArch's log file doesn't
+# take: they get a file of their own (the last start's kept as hakux.log.1)
+corelog="$here/logs/hakux.log"
+mkdir -p "$here/logs"
+[ ! -f "$corelog" ] || mv -f "$corelog" "$corelog.1"
+echo "start-hakux: ${game:-RetroArch menu} ($mode, $audio)"
+echo "start-hakux: logs: $corelog (the core), $here/logs/retroarch.log (RetroArch)"
+exec "$RETROARCH" "$@" 2>"$corelog"
 LAUNCHER
 chmod +x "$prefix/start-hakux.sh"
 
@@ -592,7 +618,7 @@ cat <<EOF
     menu:      $launcher
     settings:  $prefix/user.cfg
     saves:     $prefix/saves (the Xbox hard disk is hdd/)
-    log:       $prefix/logs/retroarch.log
+    logs:      $prefix/logs/hakux.log (the core), retroarch.log (RetroArch)
 EOF
 if [ -n "$groups_added" ]; then
     echo
