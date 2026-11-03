@@ -4,8 +4,8 @@
  * RetroArch's microphone opens only once the title reads the Communicator's
  * microphone (not for the headphone alone), at the title's rate; what it
  * hears reaches the title's microphone packets (resampled when RetroArch
- * gives another rate), silence without one; it closes when the title stops
- * and when the core stops. The
+ * gives another rate), silence without one or where its reads come up short;
+ * it closes when the title stops and when the core stops. The
  * headphone's samples are mixed into the core's output 3 dB down in both
  * channels, none lost when the frontend takes part of a period, and without
  * a Communicator the output is the APU's as it was. No guest, renderer or
@@ -32,6 +32,8 @@ static struct {
     unsigned give_rate;         /* the rate it opens at (0: the one asked for) */
     unsigned opened, closed, rate;
     bool on;
+    bool pending;               /* its reads give nothing yet (0) */
+    bool half;                  /* its reads give half of what's asked */
     int16_t value;
     size_t asked;               /* samples read, in all */
 } g_fake;
@@ -71,10 +73,11 @@ static int read_mic(retro_microphone_t *m, int16_t *s, size_t n)
     if (!g_fake.on) {
         return -1;
     }
+    g_fake.asked += n;
+    n = g_fake.pending ? 0 : g_fake.half ? n / 2 : n;
     for (size_t i = 0; i < n; i++) {
         s[i] = g_fake.value;
     }
-    g_fake.asked += n;
     return (int)n;
 }
 
@@ -257,6 +260,30 @@ int main(void)
           g_in.empty <= 2, "without a microphone the title hears silence");
     nc_lr_mic_stop();
 
+    /* RetroArch's microphone opens but its reads give nothing yet (pending),
+     * then half of what's asked: the rest is silence, the packets stay full. */
+    g_fake.have = true;
+    g_fake.pending = true;
+    g_c->reset(g_c);
+    memset(&g_in, 0, sizeof(g_in));
+    title_frames(1, 0);
+    runs(30, 0);
+    printf("  pending microphone: packets: %u samples (%u silent), %u empty\n", g_in.samples, g_in.zero,
+           g_in.empty);
+    check(g_fake.opened == 3 && g_in.samples > 30 * 16 * 16 * 8 / 10 && g_in.zero == g_in.samples &&
+          g_in.empty <= 2, "a microphone that gives nothing yet: silence in full packets");
+    g_fake.pending = false;
+    g_fake.half = true;
+    memset(&g_in, 0, sizeof(g_in));
+    runs(30, 0);
+    printf("  half reads: packets: %u samples (%u heard, %u silent, %u other), %u empty\n", g_in.samples,
+           g_in.value, g_in.zero, g_in.other, g_in.empty);
+    check(g_in.samples > 30 * 16 * 16 * 8 / 10 && g_in.value > g_in.samples * 4 / 10 &&
+          g_in.zero > g_in.samples * 4 / 10 && g_in.other == 0 && g_in.empty <= 2,
+          "a microphone that gives half: half heard, half silence, the packets full");
+    g_fake.half = false;
+    nc_lr_mic_stop();
+
     /* The headphone: 60 ms of the title's 8000 into the core's output, 3 dB
      * down (5663) in both channels, then the APU's frames alone again. */
     const int out_frames = apu_out_open(1 << 16, 0, &g_wake);
@@ -288,7 +315,7 @@ int main(void)
     outputs(3, (size_t)-1);
     check(g_got.frames > 2000 && g_got.voiced == 0 && g_got.odd == 0, "without one the output is the APU's");
     nc_lr_mic_run();
-    check(g_fake.opened == 2, "and nothing opens the microphone");
+    check(g_fake.opened == 3, "and nothing opens the microphone");
     apu_out_close();
     return failures ? 1 : 0;
 }

@@ -10,10 +10,11 @@
  * without voice, nor for the headphone alone): opened as its packets start,
  * at the title's rate (RetroArch resamples to it, the device whatever still
  * differs), and closed once they stop for IDLE_RUNS, as the core stops
- * (nc_lr_mic_stop) and as the Communicator goes. Each retro_run reads the
+ * (nc_lr_mic_stop) and as the Communicator goes. Each retro_run feeds the
  * samples of the time since the last one, so the read doesn't wait on the
- * microphone. With no microphone (RetroArch has none, or none opens) the
- * Communicator hears silence.
+ * microphone; what it doesn't give (none, or not yet) is silence. With no
+ * microphone (RetroArch has none, or none opens) the Communicator hears
+ * silence.
  */
 #include "native/libretro/libretro_int.h"
 #include "native/dev/usb.h"
@@ -129,12 +130,12 @@ void nc_lr_mic_run(void)
     if (!n) {
         return;
     }
+    /* none, failing, or a short read (pending, or not captured yet): the rest
+     * silence, so the title's packets keep up with the time */
     int got = g_mic.handle ? g_mic.mic.read_mic(g_mic.handle, buf, (size_t)n) : -1;
-    if (got < 0) {
-        memset(buf, 0, (size_t)n * sizeof(buf[0]));     /* none, paused or failing: silence */
-        got = (int)n;
-    }
-    nc_xblc_mic_put(0, buf, got, (int)g_mic.rate);
+    got = got < 0 ? 0 : MIN(got, (int)n);
+    memset(buf + got, 0, ((size_t)n - (size_t)got) * sizeof(buf[0]));
+    nc_xblc_mic_put(0, buf, (int)n, (int)g_mic.rate);
 }
 
 void nc_lr_mic_stop(void)
