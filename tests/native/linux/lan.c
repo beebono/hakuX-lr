@@ -23,14 +23,16 @@
 
 static int g_failed;
 
-#define CHECK(cond, ...)                                                                                              \
-    do {                                                                                                              \
-        printf("%s: ", (cond) ? "ok" : "FAIL");                                                                       \
-        printf(__VA_ARGS__);                                                                                          \
-        printf("\n");                                                                                                 \
-        if (!(cond)) {                                                                                                \
-            g_failed = 1;                                                                                             \
-        }                                                                                                             \
+#define CHECK(cond, ...)                                                                                     \
+    do {                                                                                                     \
+        if (cond) {                                                                                          \
+            printf("ok: ");                                                                                  \
+        } else {                                                                                             \
+            printf("FAIL: ");                                                                                \
+            g_failed = 1;                                                                                    \
+        }                                                                                                    \
+        printf(__VA_ARGS__);                                                                                 \
+        printf("\n");                                                                                        \
     } while (0)
 
 static void option(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
