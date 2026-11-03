@@ -3,11 +3,12 @@
  *
  * Each code line compiles to an op in one pool: a write, an if, else or end.
  * An address is a base and up to four pointer steps ([A]+N reads the 32-bit
- * pointer at A and adds N).
+ * pointer at A and adds N). The frontend's cheats have ops of their own.
  */
 #include "native/core/cheats.h"
 
 #include <ctype.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -50,10 +51,30 @@ static unsigned g_nops;
 static Cheat g_cheats[NC_CHEATS_MAX];
 static unsigned g_n;
 
+/* The frontend's cheats, by its index: changed in place (freed by a reset),
+ * so the lock is held to change them and by the run, which skips them for
+ * that vblank while it is taken. */
+typedef struct Front {
+    Op *ops;                    /* NULL: off */
+    unsigned n;
+    uint64_t misses;
+    bool told;                  /* its misses reported (nc_cheat_front_missed) */
+} Front;
+
+static pthread_mutex_t g_front_mu = PTHREAD_MUTEX_INITIALIZER;
+static Front g_front[NC_CHEATS_MAX];
+static unsigned g_nfront;       /* the highest index on + 1 */
+
 void nc_cheats_reset(void)
 {
     g_nops = 0;
     g_n = 0;
+    pthread_mutex_lock(&g_front_mu);
+    for (unsigned i = 0; i < g_nfront; i++) {
+        g_front[i].misses = 0;          /* the next boot's own */
+        g_front[i].told = false;
+    }
+    pthread_mutex_unlock(&g_front_mu);
 }
 
 int nc_cheat_add(const char *name, bool on, bool once)
@@ -194,79 +215,304 @@ static bool fail(char *err, size_t errlen, const char *why)
     return false;
 }
 
+static bool line_into(Cheat *c, const char *line, char *err, size_t errlen);
+
 bool nc_cheat_line(const char *line, char *err, size_t errlen)
 {
     if (!g_n) {
         return fail(err, errlen, "no cheat");
     }
-    Cheat *c = &g_cheats[g_n - 1];
-    const char *p = skip_ws(line);
+    return line_into(&g_cheats[g_n - 1], line, err, errlen);
+}
+
+int nc_cheat_compile(const char *name, bool on, bool once, const char *text, bool dry, char *err,
+                     size_t errlen)
+{
+    const unsigned n = g_n, nops = g_nops;
+    if (n >= NC_CHEATS_MAX) {
+        fail(err, errlen, "too many cheats");
+        return -1;
+    }
+    Cheat *c = &g_cheats[n];             /* not counted yet: the guest's thread doesn't look */
+    memset(c, 0, sizeof(*c));
+    snprintf(c->name, sizeof(c->name), "%s", name);
+    c->on = on;
+    c->gen = on;
+    c->once = once;
+    c->first = nops;
+    unsigned lineno = 0, ops = 0;
+    for (const char *p = text; *p;) {
+        const char *eol = strchr(p, '\n');
+        const size_t len = eol ? (size_t)(eol - p) : strlen(p);
+        size_t keep = len;
+        while (keep && p[keep - 1] == '\r') {
+            keep--;                             /* a file from Windows */
+        }
+        char line[256], why[96];
+        snprintf(line, sizeof(line), "%.*s", (int)(keep < sizeof(line) ? keep : sizeof(line) - 1), p);
+        lineno++;
+        const unsigned before = c->n;
+        if (!line_into(c, line, why, sizeof(why))) {
+            g_nops = nops;
+            if (err && errlen) {
+                snprintf(err, errlen, "line %u: %s", lineno, why);
+            }
+            return -1;
+        }
+        ops += c->n - before;
+        p = eol ? eol + 1 : p + len;
+    }
+    if (c->depth) {
+        g_nops = nops;
+        fail(err, errlen, "an if without its end");
+        return -1;
+    }
+    if (!ops) {
+        g_nops = nops;
+        fail(err, errlen, "no code lines");
+        return -1;
+    }
+    if (dry) {
+        g_nops = nops;
+        return 0;
+    }
+    __atomic_store_n(&g_n, n + 1, __ATOMIC_RELEASE);
+    return (int)n;
+}
+
+/* One code at *s, into op (depth: the ifs open before it); *s past it, the
+ * rest of its line left. NULL, or why it isn't one. */
+static const char *parse_code(const char **s, Op *op, int depth)
+{
+    const char *p = skip_ws(*s);
     char word[8];
     size_t n = 0;
-    while (*p && !isspace((unsigned char)*p) && n < sizeof(word) - 1) {
+    while (isalnum((unsigned char)*p) && n < sizeof(word) - 1) {
         word[n++] = (char)tolower((unsigned char)*p++);
     }
     word[n] = 0;
-    if (!n || word[0] == '#') {
+    memset(op, 0, sizeof(*op));
+    if (!strcmp(word, "else") || !strcmp(word, "end")) {
+        if (!depth) {
+            return "no if to close";
+        }
+        op->kind = word[1] == 'l' ? OP_ELSE : OP_END;
+    } else {
+        const bool is_if = !strncmp(word, "if", 2);
+        const char *t = word + (is_if ? 2 : 1);
+        if (!is_if && word[0] != 'w') {
+            return "unknown code";
+        }
+        op->kind = is_if ? OP_IF : OP_W;
+        if (!strcmp(t, "8") || !strcmp(t, "16") || !strcmp(t, "32")) {
+            op->width = (uint8_t)(atoi(t) / 8);
+        } else if (!strcmp(t, "f")) {
+            op->width = 4;
+            op->isf = 1;
+        } else {
+            return "unknown code";
+        }
+        if (!address(&p, &op->a)) {
+            return "bad address";
+        }
+        if (is_if && !comparison(&p, &op->cmp)) {
+            return "bad comparison";
+        }
+        if (is_if && op->isf && op->cmp == CMP_AND) {
+            return "& compares integers";
+        }
+        if (!(op->isf ? float_value(&p, &op->v) : int_value(&p, op->width, &op->v))) {
+            return "bad value";
+        }
+        if (is_if && depth >= DEPTH_MAX) {
+            return "ifs nested too deep";
+        }
+    }
+    *s = p;
+    return NULL;
+}
+
+static int depth_change(const Op *op)
+{
+    return op->kind == OP_IF ? 1 : op->kind == OP_END ? -1 : 0;
+}
+
+static bool line_into(Cheat *c, const char *line, char *err, size_t errlen)
+{
+    const char *p = skip_ws(line);
+    if (!*p || *p == '#' || isspace((unsigned char)*p)) {
         return true;                            /* blank or a comment */
     }
     if (g_nops >= OPS_MAX) {
         return fail(err, errlen, "too many code lines");
     }
     Op op;
-    memset(&op, 0, sizeof(op));
-    if (!strcmp(word, "else") || !strcmp(word, "end")) {
-        if (!c->depth) {
-            return fail(err, errlen, "no if to close");
-        }
-        op.kind = word[1] == 'l' ? OP_ELSE : OP_END;
-        c->depth -= op.kind == OP_END;
-    } else {
-        const bool is_if = !strncmp(word, "if", 2);
-        const char *t = word + (is_if ? 2 : 1);
-        if (!is_if && word[0] != 'w') {
-            return fail(err, errlen, "unknown code");
-        }
-        op.kind = is_if ? OP_IF : OP_W;
-        if (!strcmp(t, "8") || !strcmp(t, "16") || !strcmp(t, "32")) {
-            op.width = (uint8_t)(atoi(t) / 8);
-        } else if (!strcmp(t, "f")) {
-            op.width = 4;
-            op.isf = 1;
-        } else {
-            return fail(err, errlen, "unknown code");
-        }
-        if (!address(&p, &op.a)) {
-            return fail(err, errlen, "bad address");
-        }
-        if (is_if && !comparison(&p, &op.cmp)) {
-            return fail(err, errlen, "bad comparison");
-        }
-        if (is_if && op.isf && op.cmp == CMP_AND) {
-            return fail(err, errlen, "& compares integers");
-        }
-        if (!(op.isf ? float_value(&p, &op.v) : int_value(&p, op.width, &op.v))) {
-            return fail(err, errlen, "bad value");
-        }
-        if (is_if) {
-            if (c->depth >= DEPTH_MAX) {
-                return fail(err, errlen, "ifs nested too deep");
-            }
-            c->depth++;
-        }
-    }
+    const char *why = parse_code(&p, &op, c->depth);
     p = skip_ws(p);
-    if (*p && *p != '#') {
-        return fail(err, errlen, "extra text");
+    if (!why && *p && *p != '#') {
+        why = "extra text";
     }
+    if (why) {
+        return fail(err, errlen, why);
+    }
+    c->depth += depth_change(&op);
     g_ops[g_nops++] = op;
     c->n++;
     return true;
 }
 
+/* ---- the frontend's cheats ---- */
+
+/* Between a frontend's codes: blanks, newlines, + */
+static bool is_sep(char c)
+{
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '+';
+}
+
+/* Exactly 8 hex digits. */
+static bool hex8(const char **s, uint32_t *v)
+{
+    const char *p = *s;
+    for (unsigned i = 0; i < 8; i++) {
+        if (!isxdigit((unsigned char)p[i])) {
+            return false;
+        }
+    }
+    if (isalnum((unsigned char)p[8])) {
+        return false;
+    }
+    *v = (uint32_t)strtoul(p, NULL, 16);
+    *s = p + 8;
+    return true;
+}
+
+/* AAAAAAAA VVVVVVVV, cheat files' plain form: V's 32 bits written at A. */
+static bool raw_code(const char **s, Op *op)
+{
+    const char *p = *s;
+    uint32_t a, v;
+    if (!hex8(&p, &a) || (*p != ' ' && *p != '\t')) {
+        return false;
+    }
+    p = skip_ws(p);
+    if (!hex8(&p, &v)) {
+        return false;
+    }
+    memset(op, 0, sizeof(*op));
+    op->kind = OP_W;
+    op->width = 4;
+    op->a.base = a;
+    op->v = v;
+    *s = p;
+    return true;
+}
+
+/* A frontend's code text into ops of its own (malloc'd, *nops of them). */
+static bool front_compile(const char *text, Op **ops, unsigned *nops, char *err, size_t errlen)
+{
+    Op *o = NULL;
+    unsigned n = 0, cap = 0, k = 0;
+    int depth = 0;
+    const char *why = NULL;
+    for (const char *p = text; !why;) {
+        while (is_sep(*p) || *p == '#') {
+            p = *p == '#' ? p + strcspn(p, "\n") : p + 1;   /* a comment: to the line's end */
+        }
+        if (!*p) {
+            break;
+        }
+        k++;
+        Op op;
+        why = raw_code(&p, &op) ? NULL : parse_code(&p, &op, depth);
+        if (!why && *p && !is_sep(*p) && *p != '#') {
+            why = "extra text";
+        }
+        if (!why && n == cap) {
+            Op *more = n < OPS_MAX ? realloc(o, (cap ? 2 * cap : 8) * sizeof(*o)) : NULL;
+            if (more) {
+                o = more;
+                cap = cap ? 2 * cap : 8;
+            } else {
+                why = n < OPS_MAX ? "out of memory" : "too many codes";
+            }
+        }
+        if (!why) {
+            depth += depth_change(&op);
+            o[n++] = op;
+        }
+    }
+    if (why) {
+        free(o);
+        if (err && errlen) {
+            snprintf(err, errlen, "code %u: %s", k, why);
+        }
+        return false;
+    }
+    if (depth || !n) {
+        free(o);
+        return fail(err, errlen, depth ? "an if without its end" : "no codes");
+    }
+    *ops = o;
+    *nops = n;
+    return true;
+}
+
+bool nc_cheat_front_set(unsigned index, bool on, const char *text, char *err, size_t errlen)
+{
+    if (index >= NC_CHEATS_MAX) {
+        return fail(err, errlen, "too many cheats");
+    }
+    Op *ops = NULL;
+    unsigned n = 0;
+    const bool ok = !on || front_compile(text ? text : "", &ops, &n, err, errlen);
+    pthread_mutex_lock(&g_front_mu);
+    Front *f = &g_front[index];
+    Op *old = f->ops;
+    f->ops = ops;
+    f->n = n;
+    f->misses = 0;
+    f->told = false;
+    if (ops && index >= g_nfront) {
+        g_nfront = index + 1;
+    }
+    while (g_nfront && !g_front[g_nfront - 1].ops) {
+        g_nfront--;
+    }
+    pthread_mutex_unlock(&g_front_mu);
+    free(old);
+    return ok;
+}
+
+void nc_cheat_front_reset(void)
+{
+    pthread_mutex_lock(&g_front_mu);
+    for (unsigned i = 0; i < g_nfront; i++) {
+        free(g_front[i].ops);
+    }
+    memset(g_front, 0, sizeof(g_front));
+    g_nfront = 0;
+    pthread_mutex_unlock(&g_front_mu);
+}
+
+int nc_cheat_front_missed(void)
+{
+    int found = -1;
+    if (pthread_mutex_trylock(&g_front_mu)) {
+        return -1;                              /* being changed: the next vblank */
+    }
+    for (unsigned i = 0; i < g_nfront && found < 0; i++) {
+        if (g_front[i].misses && !g_front[i].told) {
+            g_front[i].told = true;
+            found = (int)i;
+        }
+    }
+    pthread_mutex_unlock(&g_front_mu);
+    return found;
+}
+
 void nc_cheat_set(int index, bool on)
 {
-    if (index < 0 || (unsigned)index >= g_n) {
+    if (index < 0 || (unsigned)index >= nc_cheat_count()) {
         return;
     }
     Cheat *c = &g_cheats[index];
@@ -283,7 +529,7 @@ bool nc_cheat_on(int index)
 
 unsigned nc_cheat_count(void)
 {
-    return g_n;
+    return __atomic_load_n(&g_n, __ATOMIC_ACQUIRE);
 }
 
 const char *nc_cheat_name(int index)
@@ -349,13 +595,13 @@ static bool compare(const Op *op, uint32_t cur)
     }
 }
 
-static unsigned run_one(Cheat *c, const NcCheatMem *m)
+static unsigned run_ops(const Op *ops, unsigned n, uint64_t *misses, const NcCheatMem *m)
 {
     struct { bool outer, taken; } st[DEPTH_MAX];
     unsigned sp = 0, wrote = 0;
     bool active = true;
-    for (unsigned i = 0; i < c->n; i++) {
-        const Op *op = &g_ops[c->first + i];
+    for (unsigned i = 0; i < n; i++) {
+        const Op *op = &ops[i];
         switch (op->kind) {
         case OP_IF: {
             bool taken = false;
@@ -365,7 +611,7 @@ static unsigned run_one(Cheat *c, const NcCheatMem *m)
                 if (resolve(m, &op->a, &va) && m->read(m->opaque, va, b, op->width)) {
                     taken = compare(op, load(b, op->width));
                 } else {
-                    c->misses++;
+                    (*misses)++;
                 }
             }
             st[sp].outer = active;
@@ -394,14 +640,14 @@ static unsigned run_one(Cheat *c, const NcCheatMem *m)
                 b[k] = (uint8_t)(op->v >> (8 * k));
             }
             if (!resolve(m, &op->a, &va) || !m->read(m->opaque, va, cur, op->width)) {
-                c->misses++;
+                (*misses)++;
                 break;
             }
             if (memcmp(cur, b, op->width)) {
                 if (m->write(m->opaque, va, b, op->width)) {
                     wrote += op->width;
                 } else {
-                    c->misses++;
+                    (*misses)++;
                 }
             }
             break;
@@ -414,7 +660,8 @@ static unsigned run_one(Cheat *c, const NcCheatMem *m)
 unsigned nc_cheats_run(const NcCheatMem *m)
 {
     unsigned wrote = 0;
-    for (unsigned i = 0; i < g_n; i++) {
+    const unsigned n = nc_cheat_count();     /* a cheat the app adds now is whole when counted */
+    for (unsigned i = 0; i < n; i++) {
         Cheat *c = &g_cheats[i];
         if (!__atomic_load_n(&c->on, __ATOMIC_ACQUIRE)) {
             continue;
@@ -424,10 +671,19 @@ unsigned nc_cheats_run(const NcCheatMem *m)
             continue;
         }
         const uint64_t misses = c->misses;
-        wrote += run_one(c, m);
+        wrote += run_ops(&g_ops[c->first], c->n, &c->misses, m);
         if (c->misses == misses) {
             c->done = gen;              /* a once cheat retries while its memory isn't there */
         }
+    }
+    if (!pthread_mutex_trylock(&g_front_mu)) {     /* taken: being changed, the next vblank */
+        for (unsigned i = 0; i < g_nfront; i++) {
+            Front *f = &g_front[i];
+            if (f->ops) {
+                wrote += run_ops(f->ops, f->n, &f->misses, m);
+            }
+        }
+        pthread_mutex_unlock(&g_front_mu);
     }
     return wrote;
 }

@@ -28,6 +28,7 @@
  * title's relaunch starts RetroArch again in its place (relaunch).
  */
 #include "native/libretro/libretro_int.h"
+#include "native/core/cheats.h"
 #include "native/core/core.h"
 #include "native/core/irq.h"
 #include "native/dev/dev.h"
@@ -84,6 +85,7 @@ static bool g_handlers;            /* on_fault installed (g_old_segv, g_old_bus)
 static void prepare_boot(bool relaunch);
 static bool can_stop(void);
 static bool boot_again(const char *why, bool relaunch);
+static void cheats_forget(void);
 
 static struct {
     pthread_mutex_t mu;
@@ -780,6 +782,7 @@ RETRO_API void retro_unload_game(void)
     handlers_restore();
     nc_lr_video_reset();
     nc_lr_vk_reset();
+    cheats_forget();                /* the next game's come from RetroArch again */
     g_game[0] = 0;
     g_dash = false;
     g_armed = false;
@@ -863,12 +866,49 @@ RETRO_API bool retro_unserialize(const void *data, size_t size)
     return false;
 }
 
+/* RetroArch's cheats (its Cheats menu, a .cht's codes): the engine's
+ * frontend set (nc_cheat_front_set), apart from the mods' cheats, from the
+ * next vblank. RetroArch sends them all again after each change (a reset,
+ * then each cheat on), also before the guest boots; a reset or a relaunch
+ * keeps them, unloading the game clears them. */
+#define CHEAT_BAD_MAX 32
+static uint64_t g_cheat_bad[CHEAT_BAD_MAX];    /* the codes refused, logged once each */
+static unsigned g_ncheat_bad;
+
+static bool cheat_told(const char *code)
+{
+    uint64_t h = 1469598103934665603ull;        /* FNV-1a */
+    for (const char *p = code; *p; p++) {
+        h = (h ^ (unsigned char)*p) * 1099511628211ull;
+    }
+    for (unsigned i = 0; i < g_ncheat_bad && i < CHEAT_BAD_MAX; i++) {
+        if (g_cheat_bad[i] == h) {
+            return true;
+        }
+    }
+    g_cheat_bad[g_ncheat_bad++ % CHEAT_BAD_MAX] = h;
+    return false;
+}
+
+static void cheats_forget(void)
+{
+    nc_cheat_front_reset();
+    g_ncheat_bad = 0;
+}
+
 RETRO_API void retro_cheat_reset(void)
 {
+    nc_cheat_front_reset();
 }
 
 RETRO_API void retro_cheat_set(unsigned index, bool enabled, const char *code)
 {
+    char err[96];
+    code = code ? code : "";
+    if (!nc_cheat_front_set(index, enabled, code, err, sizeof(err)) && !cheat_told(code)) {
+        nc_log("hakuX-libretro", "cheat %u \"%s\": %s; it stays off (mods/README.md has the codes)", index, code,
+               err);
+    }
 }
 
 RETRO_API void *retro_get_memory_data(unsigned id)

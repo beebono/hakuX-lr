@@ -326,7 +326,8 @@ Home + Start stays PortareOS's; the core adds no exit chord.
 | `retro_unload_game` | stop, join, destroy; a later load works |
 | `retro_deinit` | release the rest; `dlclose` is safe |
 | serialization | size 0, false, until section 11 passes |
-| memory, cheats, special content | unsupported |
+| `retro_cheat_set`, `retro_cheat_reset` | the codes of `mods/README.md`'s cheats, or `AAAAAAAA VVVVVVVV`, joined by `+`, blanks or newlines; a set apart from the mods' cheats, from the next vblank, also before the guest boots; kept over a reset or relaunch, cleared on unload; a code the core can't read is logged once and stays off |
+| memory, special content | unsupported |
 
 Run-ahead stays off for hakuX, now and after section 11:
 `hakux_libretro.info` declares `savestate = "false"` until states work, and

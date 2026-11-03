@@ -150,6 +150,17 @@ def run_without(command, markers, absent, env=None):
     print(f'PASS: {Path(command[0]).name} {list(map(str, command[1:]))}: without {list(absent)!r}')
 
 
+def run_counts(command, counts, env=None):
+    """Like run(), with each marker in the output exactly as many times as counts says."""
+    result = subprocess.run([str(x) for x in command], env=env, capture_output=True, text=True, timeout=15)
+    out = result.stdout + result.stderr
+    wrong = {m: out.count(m) for m, n in counts.items() if out.count(m) != n}
+    if result.returncode or wrong:
+        print(out[-4000:])
+        raise SystemExit(f'FAIL: {command}: exit {result.returncode}, {wrong!r} times, not as in {counts!r}')
+    print(f'PASS: {Path(command[0]).name} {list(map(str, command[1:]))}: {counts!r}')
+
+
 def account(area, sector, gamertag, domain):
     """Write an online account to the config sector the app reads."""
     base = sector * 512
@@ -303,6 +314,26 @@ def main():
             ('ports: 1 0 0 0', 'port 4: none', 'reset at frame 20', 'ohci: 1 controller(s) (players 1)',
              'ran 40 frames'),
             dict(vk, HARNESS_PORTS='1,0,0,0', HARNESS_RESET_AT='20'))
+        # RetroArch's cheats, applied as the game loads, before the guest
+        # boots (context_reset): the title halts once the byte is there and
+        # spins without. A code the core can't read is logged once, though
+        # RetroArch sends it again; a reset keeps the cheats, their misses
+        # counted again.
+        disc(root / 'cheat.iso',
+             b'\x80\x3d\x00\x0e\x01\x00\x5a'   # cmp byte [0x10e00], 0x5a
+             b'\x75\xf7'                       # jne back
+             b'\xf4')                          # hlt
+        run([args.harness, args.core, root / 'cheat.iso', 600, root / 'saves'], 0,
+            ('cheats: 1 applied', 'guest executed HLT'), dict(vk, HARNESS_CHEATS='w8 0x10E00 0x5A'))
+        run_without([args.harness, args.core, root / 'cheat.iso', 60, root / 'saves'], ('ran 60 frames',),
+                    ('guest executed HLT',), vk)
+        run_counts([args.harness, args.core, root / 'spin.iso', 30, root / 'saves'],
+                   {'frame 10: cheats: 2 applied': 1, '"w9 0x100 1": code 1: unknown code; it stays off': 1},
+                   dict(vk, HARNESS_CHEATS='w8 0x100 1|w9 0x100 1', HARNESS_CHEATS_AT='10'))
+        run_counts([args.harness, args.core, root / 'spin.iso', 50, root / 'saves'],
+                   {'reset at frame 20': 1, 'reset: the core stopped in': 1,
+                    "the frontend's cheat 0: an address isn't mapped (yet)": 2},
+                   dict(vk, HARNESS_CHEATS='w8 0x100 1', HARNESS_RESET_AT='20'))
         # M2: the core stops in the process and boots again: 100 games and 20
         # from a CHD, a CPU in a loop that never enters the kernel, the
         # renderer on a device of its own and on the frontend's, a reset, a

@@ -623,17 +623,17 @@ void nc_mods_poll(void)
     }
     g_vblank = v;
     nc_memscan_poll(g_vm);              /* debug.hakux.memscan */
-    if (!nc_cheat_count()) {
-        return;
-    }
     static const NcCheatMem mem = {NULL, mem_read, mem_write};
-    nc_cheats_run(&mem);
+    nc_cheats_run(&mem);                /* the manifest's and the frontend's */
     for (unsigned i = 0; i < nc_cheat_count(); i++) {
         if (!g_logged[i] && nc_cheat_misses((int)i)) {
             g_logged[i] = true;
             nc_log("hakuX-native-mods", "cheat %s: an address isn't mapped (yet): its line skipped",
                    nc_cheat_name((int)i));
         }
+    }
+    for (int i; (i = nc_cheat_front_missed()) >= 0;) {
+        nc_log("hakuX-native-mods", "the frontend's cheat %d: an address isn't mapped (yet): its code skipped", i);
     }
 }
 
