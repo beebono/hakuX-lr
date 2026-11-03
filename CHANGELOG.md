@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### What's new
+
+- **Vulkan 1.2 drivers** — The core info file, setup script and
+  documentation now require Vulkan 1.2 and recommend 1.3. Drivers below 1.3
+  use the renderer's compatibility path: render passes instead of dynamic
+  rendering, and Vulkan 1.0 barriers and submits instead of
+  synchronization2. The core logs `compat: Vulkan below 1.3` on that path
+  (it said `Vulkan 1.1` for 1.2 drivers as well).
+
+### Fixes
+
+- **Render-target dump** — The debug dump (`HAKUX_HLE_RTDUMP_SWAPS`,
+  `debug.hakux.rtdump`) no longer frees its buffer memory a second time
+  when the renderer stops.
+
+### Testing
+
+- Check a reset and a video driver rebuild on the compatibility path in
+  `libretro-smoke`.
+- On the AMD64 test machine (Radeon RX 9070), with the Khronos Profiles
+  layer reporting Vulkan 1.2 and hiding the 1.3 extensions: Burnout 3
+  and Dead or Alive 3 run at full speed in RetroArch and the libretro
+  harness, with no Vulkan validation errors (including synchronization
+  validation). Scenes that replay identically match the 1.3 path pixel for
+  pixel. `tools/native/vk-profiles` has the profile.
+
 ## linux-v0.17.2 (Linux, aarch64 and x86-64)
 
 ### Fixes

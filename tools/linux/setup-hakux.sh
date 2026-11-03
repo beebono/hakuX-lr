@@ -176,7 +176,7 @@ fi
 if [ -z "$(vulkan_icds)" ]; then
     case $(gpu_vendors) in
         *0x10de*) warn "no Vulkan driver found: install NVIDIA's driver (nvidia-utils or your distribution's equivalent)" ;;
-        *) warn "no hardware Vulkan driver found; hakuX-lr needs Vulkan 1.3" ;;
+        *) warn "no hardware Vulkan driver found; hakuX-lr needs Vulkan 1.2 or newer (1.3 recommended)" ;;
     esac
 fi
 have_libvulkan || warn "libvulkan.so.1 (the Vulkan loader) is missing"

@@ -502,6 +502,17 @@ def main():
             ('video driver rebuilt at frame 20', 'RetroArch destroyed the context: the core stopped in',
              'message: RetroArch rebuilt its video driver: the game starts again', 'ran 60 frames'),
             dict(os.environ, HARNESS_VULKAN='1', HARNESS_REINIT_AT='20'))
+        # Check that reset and video driver rebuild clear compatibility caches.
+        compat = dict(os.environ, HARNESS_VULKAN='1', HAKUX_HLE_CAPS='-vk13,-dynrender,-sync2,-eds1,-eds2')
+        compat_line = 'compat: Vulkan below 1.3, render passes, 1.0 barriers and submits'
+        run([args.harness, args.core, root / 'spin.iso', 60, root / 'saves'], 0,
+            (compat_line, 'reset at frame 20', 'reset: the core stopped in', 'back end started',
+             'ran 60 frames'),
+            dict(compat, HARNESS_RESET_AT='20'))
+        run([args.harness, args.core, root / 'spin.iso', 60, root / 'saves'], 0,
+            (compat_line, 'video driver rebuilt at frame 20',
+             'message: RetroArch rebuilt its video driver: the game starts again', 'ran 60 frames'),
+            dict(compat, HARNESS_REINIT_AT='20'))
         run([args.harness, args.core, root / 'relaunch.iso', 600, root / 'saves'], 0,
             ('relaunch into \\Device\\CdRom0\\default.xbe', 'relaunch: the game boots again in RetroArch\'s process',
              'relaunch: the core stopped in', 'relaunch: \\Device\\CdRom0\\default.xbe', 'guest executed HLT',

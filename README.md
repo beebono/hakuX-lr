@@ -46,7 +46,8 @@ Back up your [saves](#saves) before changing versions.
 ### RetroArch on other Linux systems
 
 Install a 64-bit version of RetroArch with your distribution's package
-manager. You also need a GPU driver with Vulkan 1.3, glibc 2.38 or newer,
+manager. You also need a GPU driver with Vulkan 1.3 (Vulkan 1.2 drivers use
+a compatibility path, which can be slower), glibc 2.38 or newer,
 libstdc++ from GCC 13 or newer, and zlib.
 
 Download the archive that matches your CPU:
