@@ -113,6 +113,7 @@ typedef struct Xblc {
     double hp_x, hp_y;           /* the low cut's last input and output */
     double win_sum, dc;          /* the window's sum before the low cut; this second's mean (NC_TRACE_MIC) */
     int16_t hist[VOICE_HIST];    /* the low cut's output, for the voicing */
+    double voice_f[VOICE_HIST];  /* the voicing's scratch (two devices' callbacks run at once) */
     unsigned hist_at;
     int win_n, above, hold, trace_n;
     float gain;
@@ -152,9 +153,9 @@ static char g_gate[16];          /* nc_xblc_set_gate's; "": NC_MIC_GATE's */
 /* How periodic the last VOICE_MS are at a pitch of 80-400 Hz: the highest
  * autocorrelation over those lags, normalized by the energy and the overlap
  * (1: a pure tone; noise, clicks: low). */
-static double voicing(const Xblc *x, int rate)
+static double voicing(Xblc *x, int rate)
 {
-    static double f[VOICE_HIST];
+    double *f = x->voice_f;
     const int n = rate * VOICE_MS / 1000, lo = rate / 400, hi = rate / 80;
     if (n > VOICE_HIST || hi >= n) {
         return 1;
