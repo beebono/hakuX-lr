@@ -17,6 +17,7 @@
 #include "hw/xbox/hle/vk/back.h"
 #include "hw/xbox/hle/vk/display.h"
 
+#include <sched.h>
 #ifdef __ANDROID__
 #include <sys/system_properties.h>
 #endif
@@ -1541,14 +1542,20 @@ void hle_pb_debug_pos(uint32_t *get, uint32_t *put)
     *put = hle_host_gpu_reg(NV_PFIFO_CACHE1_DMA_PUT);
 }
 
+/* Kicks in progress. The timeline thread (the frame pace's notes) can kick
+ * while hle_pb_stop runs: hle_pb_stop sets stop, then waits for this to
+ * reach 0 before it destroys the semaphore. A kick that starts after that
+ * sees stop and doesn't post. */
+static int g_kicking;
+
 void hle_pb_kick(void)
 {
-    /* not once it stops: the timeline's notes (the frame pace's) may land
-     * while hle_pb_stop destroys the semaphore */
-    if (g_pb.on && !g_pb.stop) {
+    __atomic_add_fetch(&g_kicking, 1, __ATOMIC_SEQ_CST);
+    if (__atomic_load_n(&g_pb.on, __ATOMIC_ACQUIRE) && !__atomic_load_n(&g_pb.stop, __ATOMIC_SEQ_CST)) {
         hle_atomic_inc(&g_pb.kicks);
         hle_sem_post(&g_pb.kick);
     }
+    __atomic_sub_fetch(&g_kicking, 1, __ATOMIC_RELEASE);
 }
 
 void hle_pb_put(void)
@@ -1566,7 +1573,7 @@ void hle_pb_start(void)
     }
     memset(&g_pb, 0, sizeof(g_pb));
     hle_sem_init(&g_pb.kick, 0);
-    g_pb.on = true;
+    __atomic_store_n(&g_pb.on, true, __ATOMIC_RELEASE);     /* a kick that sees it sees the semaphore */
     {
         const HleXbeLib *lib = hle_xbe_d3d_lib(&g_hle.title.xbe);
         const char *e = getenv("HAKUX_HLE_PB_RUNS");
@@ -1605,9 +1612,12 @@ void hle_pb_stop(void)
     g_sc_gate = false;
     __atomic_store_n(&g_sc_on, false, __ATOMIC_RELEASE);
     hle_barrier_set_report_scout(NULL, NULL);
-    g_pb.stop = true;
+    __atomic_store_n(&g_pb.stop, true, __ATOMIC_SEQ_CST);
     hle_sem_post(&g_pb.kick);
     hle_thread_join(&g_pb.th);
+    while (__atomic_load_n(&g_kicking, __ATOMIC_SEQ_CST)) {
+        sched_yield();
+    }
     hle_sem_destroy(&g_pb.kick);
     hle_sem_destroy(&g_cu.sem);
     hle_pbd_stop();
