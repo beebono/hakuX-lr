@@ -1,15 +1,16 @@
 /* Copyright (C) 2026-present PortareOS */
 /*
  * hakuX native core — the voices' band-limited resampler, resample.h's sinc
- * (resample_sinc.c): AArch64 only, its taps through NEON. Elsewhere
- * VP_HAVE_SINC is undefined and resample.c resamples linearly.
+ * (resample_sinc.c): its taps through NEON on AArch64, through AVX2 + FMA or
+ * SSE2 on x86-64 (simd.h). Elsewhere VP_HAVE_SINC is undefined and
+ * resample.c resamples linearly.
  */
 #ifndef NATIVE_DEV_APU_VP_RESAMPLE_SINC_H
 #define NATIVE_DEV_APU_VP_RESAMPLE_SINC_H
 
 #include "resample.h"
 
-#if defined(__aarch64__)
+#if defined(__aarch64__) || defined(__x86_64__)
 #define VP_HAVE_SINC 1
 
 typedef struct VpSinc VpSinc;

@@ -2,8 +2,9 @@
 /*
  * hakuX native core — the voices' band-limited resampler (resample.h's
  * sinc): a Kaiser-windowed sinc interpolator in float, its taps through
- * NEON. A quality setting, not a claim about the Xbox's undocumented
- * interpolation.
+ * NEON on AArch64; on x86-64 through AVX2 + FMA (NEON's sums, bit for bit),
+ * SSE2 or scalar code, by the CPU (simd.h). A quality setting, not a claim
+ * about the Xbox's undocumented interpolation.
  *
  * At a ratio of 1 or more (a voice at or below the output's 48 kHz) the
  * filter is 32 taps, its cutoff at the input's Nyquist frequency, from a
@@ -25,7 +26,11 @@
 #include "resample_sinc.h"
 
 #ifdef VP_HAVE_SINC
+#if defined(__aarch64__)
 #include <arm_neon.h>
+#else
+#include "simd.h"
+#endif
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -52,8 +57,8 @@ struct VpSinc {
  * more, g_phase[p][k] = h(k - (HALF - 1) - p / PHASES), each row summing to
  * 1 (DC passes exactly); by position for the stretched filter, g_fine[i] =
  * h(i / PHASES), then zeros for the 4 taps it reads at a time. */
-static float g_phase[PHASES + 1][TAPS];
-static float g_fine[HALF * PHASES + 4 * PHASES];
+static _Alignas(64) float g_phase[PHASES + 1][TAPS];
+static _Alignas(64) float g_fine[HALF * PHASES + 4 * PHASES];
 static pthread_once_t g_tables_once = PTHREAD_ONCE_INIT;
 
 static double bessel_i0(double x)
@@ -163,9 +168,15 @@ static bool refill(VpSinc *s, vp_resample_cb cb, void *cb_data, long n)
     if (s->channels == 2) {
         long i = 0;
         for (; i + 4 <= got; i += 4) {
+#if defined(__aarch64__)
             const float32x4x2_t v = vld2q_f32(in + 2 * i);
             vst1q_f32(l + i, v.val[0]);
             vst1q_f32(r + i, v.val[1]);
+#else
+            const __m128 a = _mm_loadu_ps(in + 2 * i), b = _mm_loadu_ps(in + 2 * i + 4);
+            _mm_storeu_ps(l + i, _mm_shuffle_ps(a, b, _MM_SHUFFLE(2, 0, 2, 0)));
+            _mm_storeu_ps(r + i, _mm_shuffle_ps(a, b, _MM_SHUFFLE(3, 1, 3, 1)));
+#endif
         }
         for (; i < got; i++) {
             l[i] = in[2 * i];
@@ -178,6 +189,7 @@ static bool refill(VpSinc *s, vp_resample_cb cb, void *cb_data, long n)
     return got > 0;
 }
 
+#if defined(__aarch64__)
 /* An output frame at a ratio of 1 or more: the 32 taps around frame n at
  * phase frac, between table rows p and p + 1 */
 static void out_taps(const VpSinc *s, long n, float frac, float *out)
@@ -258,7 +270,198 @@ static void out_stretched(const VpSinc *s, long n, double frac, int m, float *ou
     }
 }
 
-long vp_sinc_read(VpSinc *s, vp_resample_cb cb, void *cb_data, double ratio, long frames, float *data)
+#else
+/* ---- x86-64: out_taps and out_stretched in AVX2 + FMA (NEON's lanes and
+ * their order, bit for bit), in SSE2 (each fused multiply-add a multiply
+ * and an add) and in scalar code (the comparison: summed in tap order) */
+
+/* the table row below frac's phase, and the fraction to the next */
+static inline const float *phase_row(float frac, float *t)
+{
+    const float ph = frac * PHASES;
+    int p = (int)ph;
+    p = p < PHASES ? p : PHASES - 1;
+    *t = ph - (float)p;
+    return g_phase[p];
+}
+
+static inline __attribute__((always_inline)) VP_AVX2 void
+out_taps_avx2(const VpSinc *s, long n, float frac, float *out)
+{
+    float t;
+    const float *c0 = phase_row(frac, &t), *c1 = c0 + TAPS;
+    const __m256 f = _mm256_set1_ps(t);
+    const float *xl = s->buf[0] + n - (HALF - 1), *xr = s->buf[1] + n - (HALF - 1);
+    __m256 l = _mm256_setzero_ps(), r = l;
+    for (int k = 0; k < TAPS; k += 8) {
+        const __m256 a = _mm256_loadu_ps(c0 + k);
+        const __m256 c = _mm256_fmadd_ps(_mm256_sub_ps(_mm256_loadu_ps(c1 + k), a), f, a);
+        l = _mm256_fmadd_ps(c, _mm256_loadu_ps(xl + k), l);
+        r = _mm256_fmadd_ps(c, _mm256_loadu_ps(xr + k), r);
+    }
+    out[0] = vp_avx_sum(l);
+    if (s->channels == 2) {
+        out[1] = vp_avx_sum(r);
+    }
+}
+
+static inline __attribute__((always_inline)) void out_taps_sse2(const VpSinc *s, long n, float frac, float *out)
+{
+    float t;
+    const float *c0 = phase_row(frac, &t), *c1 = c0 + TAPS;
+    const __m128 f = _mm_set1_ps(t);
+    const float *xl = s->buf[0] + n - (HALF - 1), *xr = s->buf[1] + n - (HALF - 1);
+    __m128 l0 = _mm_setzero_ps(), l1 = l0, r0 = l0, r1 = l0;
+    for (int k = 0; k < TAPS; k += 8) {
+        const __m128 a0 = _mm_loadu_ps(c0 + k), a1 = _mm_loadu_ps(c0 + k + 4);
+        const __m128 k0 = _mm_add_ps(a0, _mm_mul_ps(_mm_sub_ps(_mm_loadu_ps(c1 + k), a0), f));
+        const __m128 k1 = _mm_add_ps(a1, _mm_mul_ps(_mm_sub_ps(_mm_loadu_ps(c1 + k + 4), a1), f));
+        l0 = _mm_add_ps(l0, _mm_mul_ps(k0, _mm_loadu_ps(xl + k)));
+        l1 = _mm_add_ps(l1, _mm_mul_ps(k1, _mm_loadu_ps(xl + k + 4)));
+        r0 = _mm_add_ps(r0, _mm_mul_ps(k0, _mm_loadu_ps(xr + k)));
+        r1 = _mm_add_ps(r1, _mm_mul_ps(k1, _mm_loadu_ps(xr + k + 4)));
+    }
+    out[0] = vp_sse_sum(_mm_add_ps(l0, l1));
+    if (s->channels == 2) {
+        out[1] = vp_sse_sum(_mm_add_ps(r0, r1));
+    }
+}
+
+static void out_taps_scalar(const VpSinc *s, long n, float frac, float *out)
+{
+    float t;
+    const float *c0 = phase_row(frac, &t), *c1 = c0 + TAPS;
+    const float *xl = s->buf[0] + n - (HALF - 1), *xr = s->buf[1] + n - (HALF - 1);
+    float l = 0.0f, r = 0.0f;
+    for (int k = 0; k < TAPS; k++) {
+        const float c = c0[k] + (c1[k] - c0[k]) * t;
+        l += c * xl[k];
+        r += c * xr[k];
+    }
+    out[0] = l;
+    if (s->channels == 2) {
+        out[1] = r;
+    }
+}
+
+/* g_fine[i + q * m] (a) and the entry after (b), q = 0..3 */
+static inline void fine_pairs(int i, int m, __m128 *a, __m128 *b)
+{
+    const __m128 p0 = _mm_castpd_ps(_mm_load_sd((const double *)(g_fine + i)));
+    const __m128 p1 = _mm_castpd_ps(_mm_load_sd((const double *)(g_fine + i + m)));
+    const __m128 p2 = _mm_castpd_ps(_mm_load_sd((const double *)(g_fine + i + 2 * m)));
+    const __m128 p3 = _mm_castpd_ps(_mm_load_sd((const double *)(g_fine + i + 3 * m)));
+    const __m128 lo = _mm_movelh_ps(p0, p1), hi = _mm_movelh_ps(p2, p3);
+    *a = _mm_shuffle_ps(lo, hi, _MM_SHUFFLE(2, 0, 2, 0));
+    *b = _mm_shuffle_ps(lo, hi, _MM_SHUFFLE(3, 1, 3, 1));
+}
+
+/* frames j, j - 1, j - 2, j - 3 */
+static inline __m128 reversed4(const float *x, long j)
+{
+    const __m128 v = _mm_loadu_ps(x + j - 3);
+    return _mm_shuffle_ps(v, v, _MM_SHUFFLE(0, 1, 2, 3));
+}
+
+/* the stretched filter's taps 4 at a time in 128 bits, as NEON's lanes */
+static inline __attribute__((always_inline)) VP_AVX2 void
+out_stretched_avx2(const VpSinc *s, long n, double frac, int m, float *out)
+{
+    const double a = frac * m;
+    const int ia = (int)a;
+    const float ta = (float)(a - ia), tb = ta > 0.0f ? 1.0f - ta : 0.0f;
+    const float *xl = s->buf[0], *xr = s->buf[1];
+    __m128 l = _mm_setzero_ps(), r = l, sum = l, c0, c1;
+    const __m128 vta = _mm_set1_ps(ta), vtb = _mm_set1_ps(tb);
+    long j = n;
+    for (int i = ia; i < HALF * PHASES; i += 4 * m, j -= 4) {     /* n, n - 1, ... */
+        fine_pairs(i, m, &c0, &c1);
+        const __m128 c = _mm_fmadd_ps(_mm_sub_ps(c1, c0), vta, c0);
+        l = _mm_fmadd_ps(c, reversed4(xl, j), l);
+        r = _mm_fmadd_ps(c, reversed4(xr, j), r);
+        sum = _mm_add_ps(sum, c);
+    }
+    j = n + 1;
+    for (int i = ta > 0.0f ? m - ia - 1 : m - ia; i < HALF * PHASES; i += 4 * m, j += 4) {
+        fine_pairs(i, m, &c0, &c1);
+        const __m128 c = _mm_fmadd_ps(_mm_sub_ps(c1, c0), vtb, c0);
+        l = _mm_fmadd_ps(c, _mm_loadu_ps(xl + j), l);
+        r = _mm_fmadd_ps(c, _mm_loadu_ps(xr + j), r);
+        sum = _mm_add_ps(sum, c);
+    }
+    const float total = vp_sse_sum(sum);
+    out[0] = vp_sse_sum(l) / total;
+    if (s->channels == 2) {
+        out[1] = vp_sse_sum(r) / total;
+    }
+}
+
+static inline __attribute__((always_inline)) void
+out_stretched_sse2(const VpSinc *s, long n, double frac, int m, float *out)
+{
+    const double a = frac * m;
+    const int ia = (int)a;
+    const float ta = (float)(a - ia), tb = ta > 0.0f ? 1.0f - ta : 0.0f;
+    const float *xl = s->buf[0], *xr = s->buf[1];
+    __m128 l = _mm_setzero_ps(), r = l, sum = l, c0, c1;
+    const __m128 vta = _mm_set1_ps(ta), vtb = _mm_set1_ps(tb);
+    long j = n;
+    for (int i = ia; i < HALF * PHASES; i += 4 * m, j -= 4) {
+        fine_pairs(i, m, &c0, &c1);
+        const __m128 c = _mm_add_ps(c0, _mm_mul_ps(_mm_sub_ps(c1, c0), vta));
+        l = _mm_add_ps(l, _mm_mul_ps(c, reversed4(xl, j)));
+        r = _mm_add_ps(r, _mm_mul_ps(c, reversed4(xr, j)));
+        sum = _mm_add_ps(sum, c);
+    }
+    j = n + 1;
+    for (int i = ta > 0.0f ? m - ia - 1 : m - ia; i < HALF * PHASES; i += 4 * m, j += 4) {
+        fine_pairs(i, m, &c0, &c1);
+        const __m128 c = _mm_add_ps(c0, _mm_mul_ps(_mm_sub_ps(c1, c0), vtb));
+        l = _mm_add_ps(l, _mm_mul_ps(c, _mm_loadu_ps(xl + j)));
+        r = _mm_add_ps(r, _mm_mul_ps(c, _mm_loadu_ps(xr + j)));
+        sum = _mm_add_ps(sum, c);
+    }
+    const float total = vp_sse_sum(sum);
+    out[0] = vp_sse_sum(l) / total;
+    if (s->channels == 2) {
+        out[1] = vp_sse_sum(r) / total;
+    }
+}
+
+static void out_stretched_scalar(const VpSinc *s, long n, double frac, int m, float *out)
+{
+    const double a = frac * m;
+    const int ia = (int)a;
+    const float ta = (float)(a - ia), tb = ta > 0.0f ? 1.0f - ta : 0.0f;
+    const float *xl = s->buf[0], *xr = s->buf[1];
+    float l = 0.0f, r = 0.0f, sum = 0.0f;
+    long j = n;
+    for (int i = ia; i < HALF * PHASES; i += m, j--) {
+        const float c = g_fine[i] + (g_fine[i + 1] - g_fine[i]) * ta;
+        l += c * xl[j];
+        r += c * xr[j];
+        sum += c;
+    }
+    j = n + 1;
+    for (int i = ta > 0.0f ? m - ia - 1 : m - ia; i < HALF * PHASES; i += m, j++) {
+        const float c = g_fine[i] + (g_fine[i + 1] - g_fine[i]) * tb;
+        l += c * xl[j];
+        r += c * xr[j];
+        sum += c;
+    }
+    out[0] = l / sum;
+    if (s->channels == 2) {
+        out[1] = r / sum;
+    }
+}
+#endif
+
+typedef void (*SincTaps)(const VpSinc *s, long n, float frac, float *out);
+typedef void (*SincStretched)(const VpSinc *s, long n, double frac, int m, float *out);
+
+static inline __attribute__((always_inline)) long
+sinc_read(VpSinc *s, vp_resample_cb cb, void *cb_data, double ratio, long frames, float *data,
+          SincTaps taps, SincStretched stretched)
 {
     const double step = 1.0 / ratio;
     /* the stretched filter's 1/128ths (rounded down: its cutoff at or under
@@ -278,13 +481,38 @@ long vp_sinc_read(VpSinc *s, vp_resample_cb cb, void *cb_data, double ratio, lon
         const double frac = s->pos - (double)n;
         float *out = data + i * s->channels;
         if (m < PHASES) {
-            out_stretched(s, n, frac, m, out);
+            stretched(s, n, frac, m, out);
         } else {
-            out_taps(s, n, (float)frac, out);
+            taps(s, n, (float)frac, out);
         }
         s->pos += step;
     }
     return frames;
 }
+
+#if defined(__aarch64__)
+long vp_sinc_read(VpSinc *s, vp_resample_cb cb, void *cb_data, double ratio, long frames, float *data)
+{
+    return sinc_read(s, cb, cb_data, ratio, frames, data, out_taps, out_stretched);
+}
+#else
+static VP_AVX2 long sinc_read_avx2(VpSinc *s, vp_resample_cb cb, void *cb_data, double ratio, long frames,
+                                   float *data)
+{
+    return sinc_read(s, cb, cb_data, ratio, frames, data, out_taps_avx2, out_stretched_avx2);
+}
+
+long vp_sinc_read(VpSinc *s, vp_resample_cb cb, void *cb_data, double ratio, long frames, float *data)
+{
+    switch (vp_simd_level()) {
+    case VP_SIMD_AVX2:
+        return sinc_read_avx2(s, cb, cb_data, ratio, frames, data);
+    case VP_SIMD_SSE2:
+        return sinc_read(s, cb, cb_data, ratio, frames, data, out_taps_sse2, out_stretched_sse2);
+    default:
+        return sinc_read(s, cb, cb_data, ratio, frames, data, out_taps_scalar, out_stretched_scalar);
+    }
+}
+#endif
 
 #endif

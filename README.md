@@ -191,7 +191,7 @@ immediately.
 | Screen Format | Choose **Widescreen** for games that support it. Set RetroArch's aspect ratio to **Core provided**. |
 | Crop Overscan | On by default to hide borders around the picture. Turn it off to show the full frame. |
 | Audio Processing | Defaults to **Full DSP (experimental)**, which runs Xbox audio effects. Try **Fast** if audio crackles or a game runs slowly. |
-| Audio Resampler | ARM64 defaults to **Sinc**. Try **Linear** to reduce CPU use at the cost of some audio quality. AMD64 always uses Linear. |
+| Audio Resampler | Defaults to **Sinc**. Try **Linear** to reduce CPU use at the cost of some audio quality. |
 
 ## Saves
 
