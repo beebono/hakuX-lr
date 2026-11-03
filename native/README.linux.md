@@ -46,12 +46,13 @@ its system instructions come to the kernel as they do from FEX. It needs
 `/dev/kvm` with TSC scaling and UMIP (`container run` on a Mac has neither:
 build there, run on an x86-64 Linux machine or in CI, which hands the
 container its runner's `/dev/kvm`). `kvm-smoke` checks the backend itself;
-the other tests run as on ARM64. Voices resample linearly without NEON;
-the DSP JIT is off and audio processing defaults to Fast. Releases include
-an experimental x86-64 archive; see the
+the other tests run as on ARM64, the DSP JIT among them (Cranelift emits
+x86-64 code): audio processing defaults to Full DSP there too. Voices
+resample linearly without NEON. Releases include an experimental x86-64
+archive; see the
 [installation guide](../README.md#play-on-amd64-x86-64-linux-systems).
 
-The Linux ARM64 build enables `HAKUX_DSP_JIT` by default. It builds
+The Linux builds (ARM64 and x86-64) enable `HAKUX_DSP_JIT` by default. It builds
 dsp56300 0.1.3 from pinned sources using Cargo's locked dependencies;
 release archives include their license notices and Rust toolchain version.
 `-DHAKUX_DSP_JIT=OFF` builds the C interpreter without requiring Rust.
