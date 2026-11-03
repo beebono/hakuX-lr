@@ -6,7 +6,8 @@
  * nc_dev_ohci_init makes them: plugged in before the boot and while the
  * console runs (nc_pad_plug), pulled out, and enumerated again.
  *
- *   cc -O1 -I. tests/native/usb/usb_test.c native/dev/usb.c native/dev/usb_hub.c native/dev/xid.c -lpthread
+ *   cc -O1 -I. tests/native/usb/usb_test.c native/dev/usb.c native/dev/usb_hub.c native/dev/xid.c \
+ *      native/dev/xblc.c -lpthread
  *
  * The build's usb-smoke test (native/cmake/linux-tests.cmake) is this.
  */

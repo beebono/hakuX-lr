@@ -68,7 +68,8 @@ set_tests_properties(nat-smoke PROPERTIES TIMEOUT 60)
 # The USB stack driven as the guest's would: enumeration, input, rumble, and
 # controllers plugged in and pulled out.
 add_executable(usb-smoke "${NC_REPO}/tests/native/usb/usb_test.c" "${NC_REPO}/native/dev/usb.c"
-                         "${NC_REPO}/native/dev/usb_hub.c" "${NC_REPO}/native/dev/xid.c")
+                         "${NC_REPO}/native/dev/usb_hub.c" "${NC_REPO}/native/dev/xid.c"
+                         "${NC_REPO}/native/dev/xblc.c")
 target_include_directories(usb-smoke PRIVATE "${NC_REPO}")
 target_link_libraries(usb-smoke PRIVATE Threads::Threads)
 add_test(NAME usb-smoke COMMAND usb-smoke)

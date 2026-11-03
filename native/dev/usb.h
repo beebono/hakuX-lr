@@ -66,10 +66,15 @@ void nc_usb_reset(NcUsbDev *d);
 /* d or a device below it with this address. */
 NcUsbDev *nc_usb_find(NcUsbDev *d, uint8_t addr);
 
+/* xblc.c: the Xbox Live Communicator (voice chat) for player 0-3; freed
+ * (true) if d is one (nc_usb_dev_free). */
+NcUsbDev *nc_xblc_new(unsigned player);
+bool nc_xblc_free(NcUsbDev *d);
+
 /* usb_hub.c: a hub with nports downstream ports (1-based). */
 NcUsbDev *nc_usb_hub_new(unsigned nports);
-/* A device made by nc_usb_hub_new or nc_xid_gamepad_new freed, with what
- * hangs off it (NULL: nothing). */
+/* A device made by nc_usb_hub_new, nc_xid_gamepad_new or nc_xblc_new freed,
+ * with what hangs off it (NULL: nothing). */
 void nc_usb_dev_free(NcUsbDev *d);
 void nc_usb_hub_attach(NcUsbDev *hub, unsigned port, NcUsbDev *child);
 
