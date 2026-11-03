@@ -48,6 +48,13 @@ void nc_disc_close(NcDisc *d);
  * case-insensitive). */
 bool nc_disc_find(const NcDisc *d, const char *path, NcDiscFile *out);
 
+/* Visits a directory's entries in sorted order until fn returns false. dir
+ * holds the directory's size bytes. Each entry is visited once, so a
+ * malformed tree that loops still ends. fn only sees entries whose name
+ * (e[13] bytes at e + 14) fits inside dir. Returns false if out of memory. */
+typedef bool (*NcXdvdfsEntryFn)(void *ctx, const uint8_t *e, uint32_t off);
+bool nc_xdvdfs_walk(const uint8_t *dir, uint32_t size, NcXdvdfsEntryFn fn, void *ctx);
+
 /* Reads len bytes at offset off of a file. */
 bool nc_disc_read(const NcDisc *d, const NcDiscFile *f, uint64_t off, void *buf, size_t len);
 /* ... as the title's file I/O sees it: the overlay's files, but not the XBE

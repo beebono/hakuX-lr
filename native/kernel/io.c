@@ -2107,36 +2107,24 @@ typedef struct DirEntry {
     bool dir;
 } DirEntry;
 
-/* In order over the tree (a listing sorted as the disc keeps it). No depth
- * cap: a tree can be one long chain (Conker's dvddata\Audio is 77 deep).
- * Every entry takes at least 16 bytes: *budget, size / 16 + 1 visits at
- * first, bounds a well-formed walk, and a looping one. */
-static void disc_dir_walk(const uint8_t *dir, uint32_t size, uint32_t off, DirEntry *out, unsigned *n, unsigned cap,
-                          uint32_t *budget)
+typedef struct DirList {
+    DirEntry *out;
+    unsigned *n, cap;
+} DirList;
+
+static bool list_entry(void *ctx, const uint8_t *e, uint32_t off)
 {
-    if (off + 14 > size || !*budget || *n >= cap) {
-        return;
-    }
-    --*budget;
-    const uint8_t *e = dir + off;
-    const uint16_t left = nc_rd16(e), right = nc_rd16(e + 2);
-    if (left == 0xFFFF && right == 0xFFFF && e[12] == 0xFF) {
-        return;
-    }
-    if (left && left != 0xFFFF) { /* 0: no subtree */
-        disc_dir_walk(dir, size, left * 4u, out, n, cap, budget);
-    }
+    DirList *l = ctx;
     const uint8_t nlen = e[13];
-    if (*n < cap && off + 14 + nlen <= size && nlen < sizeof(out->name)) {
-        DirEntry *d = &out[(*n)++];
+    (void)off;
+    if (nlen < sizeof(l->out->name)) {
+        DirEntry *d = &l->out[(*l->n)++];
         memcpy(d->name, e + 14, nlen);
         d->name[nlen] = 0;
         d->size = nc_rd32(e + 8);
         d->dir = e[12] & 0x10;
     }
-    if (right && right != 0xFFFF) {
-        disc_dir_walk(dir, size, right * 4u, out, n, cap, budget);
-    }
+    return *l->n < l->cap;
 }
 
 /* A mod's file or folder in a disc folder's listing (nc_disc_overlay_list):
@@ -2171,8 +2159,10 @@ static unsigned list_dir(NcKernel *k, const NcFile *nf, DirEntry *out, unsigned 
         if (nf->disc.size && nf->disc.sector < NC_DISC_OVERLAY) {
             uint8_t *dir = malloc(nf->disc.size);
             if (dir && nc_disc_read(k->disc, &nf->disc, 0, dir, nf->disc.size)) {
-                uint32_t budget = nf->disc.size / 16 + 1;
-                disc_dir_walk(dir, nf->disc.size, 0, out, &n, cap, &budget);
+                DirList l = {out, &n, cap};
+                if (n < cap) {
+                    nc_xdvdfs_walk(dir, nf->disc.size, list_entry, &l);
+                }
             }
             free(dir);
         }

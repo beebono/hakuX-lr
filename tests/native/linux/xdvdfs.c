@@ -1,12 +1,10 @@
 /* Copyright (C) 2026-present PortareOS */
-/*
- * Host test of the disc's directory search (native/core/xdvdfs.c) on a
- * synthetic XISO: a root whose tree is one 80-entry chain (deeper than the
- * 64 levels the search once stopped at; Conker's dvddata\Audio is 77), and
- * a tree that loops back on itself.
- */
+/* Test directory lookup and listing on deep and looping XDVDFS trees. The
+ * listing walks run on a small thread stack, so recursion would overflow it. */
 #include "native/core/xdvdfs.h"
 
+#include <limits.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -95,9 +93,79 @@ static int image(void)
     return fd;
 }
 
+static void wr_entry(uint8_t *e, uint16_t left, uint16_t right, const char *name)
+{
+    wr16(e, left);
+    wr16(e + 2, right);
+    wr32(e + 4, 0);
+    wr32(e + 8, 0);
+    e[12] = 0x20;
+    e[13] = (uint8_t)strlen(name);
+    memcpy(e + 14, name, strlen(name));
+}
+
+/* A listing: the names in visit order, joined by spaces */
+typedef struct List {
+    char text[1200];
+    unsigned n;
+} List;
+
+static bool list_add(void *ctx, const uint8_t *e, uint32_t off)
+{
+    List *l = ctx;
+    size_t used = strlen(l->text);
+    (void)off;
+    snprintf(l->text + used, sizeof(l->text) - used, "%s%.*s", l->n ? " " : "", e[13], (const char *)e + 14);
+    l->n++;
+    return true;
+}
+
+static bool count(void *ctx, const uint8_t *e, uint32_t off)
+{
+    (void)e;
+    (void)off;
+    ++*(unsigned *)ctx;
+    return true;
+}
+
+/* The walks that would need a deep stack, on a small one */
+static void *small_stack(void *arg)
+{
+    int *fails = arg;
+    /* 16 MiB of padding but for a left-child cycle: 0 -> 20 -> 20 */
+    const uint32_t big = 16u << 20;
+    uint8_t *dir = malloc(big);
+    if (!dir) {
+        ++*fails;
+        return NULL;
+    }
+    memset(dir, 0xFF, big);
+    wr_entry(dir, 20 / 4, 0, "TOP");
+    wr_entry(dir + 20, 20 / 4, 0, "SELF");
+    unsigned n = 0;
+    *fails += !(nc_xdvdfs_walk(dir, big, count, &n) && n == 2);
+    printf("%s a 16 MiB directory with a left-child cycle: each entry once (%u)\n", n == 2 ? "PASS" : "FAIL", n);
+    /* the longest chain of left children 16-bit offsets reach */
+    const unsigned chain = 0x3FFFCu / 20;
+    memset(dir, 0xFF, big);
+    for (unsigned i = 0; i < chain; i++) {
+        char name[8];
+        snprintf(name, sizeof(name), "%05u", i);
+        wr_entry(dir + i * 20, i + 1 < chain ? (uint16_t)((i + 1) * 20 / 4) : 0, 0, name);
+    }
+    n = 0;
+    const bool walked = nc_xdvdfs_walk(dir, chain * 20, count, &n);
+    *fails += !(walked && n == chain);
+    printf("%s a %u-deep chain of left children: every entry (%u)\n", walked && n == chain ? "PASS" : "FAIL",
+           chain, n);
+    free(dir);
+    return NULL;
+}
+
 int main(void)
 {
     int fd = image();
+    const int fd_listing = fd >= 0 ? dup(fd) : -1;
     NcDisc d;
     if (fd < 0 || !nc_disc_open(&d, fd)) {
         printf("FAIL the image\n");
@@ -111,6 +179,33 @@ int main(void)
     check(!nc_disc_find(&d, "LOOP\\CCC", &f), "a missing one there: not found, and the search ends");
     check(!nc_disc_find(&d, "F80", &f), "a missing one in the root");
     nc_disc_close(&d);
+
+    /* listings, in the disc's order */
+    static uint8_t img_root[SECTOR];
+    lseek(fd_listing, 33 * SECTOR, SEEK_SET);
+    List l = {{0}, 0};
+    const bool root_read = read(fd_listing, img_root, SECTOR) == SECTOR;
+    check(root_read && nc_xdvdfs_walk(img_root, SECTOR, list_add, &l) && l.n == CHAIN + 1 &&
+              !strncmp(l.text, "F00 F01 F02", 11) && !strcmp(l.text + strlen(l.text) - 8, "F79 LOOP"),
+          "the root's listing: the chain's 80 files, then LOOP");
+    static uint8_t img_loop[SECTOR];
+    List ll = {{0}, 0};
+    const bool loop_read = read(fd_listing, img_loop, SECTOR) == SECTOR;
+    check(loop_read && nc_xdvdfs_walk(img_loop, SECTOR, list_add, &ll) && !strcmp(ll.text, "AAA BBB"),
+          "LOOP's listing: each entry once");
+    close(fd_listing);
+
+    pthread_attr_t attr;
+    pthread_t th;
+    int fails = 0;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, PTHREAD_STACK_MIN > 0x20000 ? PTHREAD_STACK_MIN : 0x20000);
+    if (pthread_create(&th, &attr, small_stack, &fails) != 0) {
+        fails++;
+    } else {
+        pthread_join(th, NULL);
+    }
+    g_fail += fails;
     printf("%s\n", g_fail ? "FAILED" : "all passed");
     return g_fail != 0;
 }

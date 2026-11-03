@@ -49,15 +49,15 @@ add_executable(apu-adpcm-test "${NC_REPO}/tests/native/apu/adpcm_test.c")
 target_include_directories(apu-adpcm-test PRIVATE "${NC_REPO}")
 add_test(NAME apu-adpcm-test COMMAND apu-adpcm-test)
 set_tests_properties(apu-adpcm-test PROPERTIES TIMEOUT 10)
-# The kernel's crypto (SHA-1, HMAC, DES, RC4, modexp, the drive's signature).
+# Check the kernel crypto against published vectors and the drive's signature.
 add_executable(xc-test "${NC_REPO}/tests/native/xc/xc_test.c" "${NC_REPO}/native/kernel/xc_crypto.c")
 target_include_directories(xc-test PRIVATE "${NC_REPO}")
 add_test(NAME xc-test COMMAND xc-test)
 set_tests_properties(xc-test PROPERTIES TIMEOUT 10)
-# The disc's directory search: a tree deeper than 64 levels, and one that loops.
+# Check disc directory lookup and listing on deep and looping trees.
 add_executable(xdvdfs-test "${NC_REPO}/tests/native/linux/xdvdfs.c")
 target_include_directories(xdvdfs-test PRIVATE "${NC_REPO}")
-target_link_libraries(xdvdfs-test PRIVATE hakux_native)
+target_link_libraries(xdvdfs-test PRIVATE hakux_native Threads::Threads)
 add_test(NAME xdvdfs-test COMMAND xdvdfs-test)
 set_tests_properties(xdvdfs-test PROPERTIES TIMEOUT 10)
 # Exercise NAT with console frames and a fake UPnP router.
