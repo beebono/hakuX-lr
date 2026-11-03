@@ -132,6 +132,15 @@ The PortareOS build (`HAKUX_LR_END_PROCESS`) exits RetroArch if shutdown
 takes longer than 10 seconds. Set `HAKUX_LR_STOP=0` for the legacy behavior:
 closing a game exits RetroArch, and switching game executables relaunches it.
 
+Cheats come from RetroArch's **Cheats** menu or a `.cht` file. A cheat's
+code is one or more codes joined by `+`, spaces or newlines: the code lines
+of [mods/README.md](../mods/README.md#cheats-cheatstxt) (`w32 0x0034A5C8 99`,
+`if16 0x00ABCDE0 != 0 + w16 [0x00456700]+0x1C 0x00C8 + end`), or
+`AAAAAAAA VVVVVVVV`, which writes the 32-bit hex value V at the hex address
+A. Cheats apply from the next frame, also when applied before the game has
+started, and stay through a reset. A code the core can't read is logged once
+and that cheat stays off.
+
 Core options (`native/libretro/options.c`) apply on the next game start,
 except Crop Overscan and Rumble, which update immediately:
 

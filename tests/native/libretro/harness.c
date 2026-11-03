@@ -37,6 +37,10 @@
  * again before the Nth (Mth) retro_run, as RetroArch's menu does.
  * HARNESS_PRESS="port:id:from:to,...": the RetroPad button id (0-based port,
  * RETRO_DEVICE_ID_JOYPAD_*) held from the from'th retro_run until the to'th.
+ * HARNESS_CHEATS="code|code|...": a game's cheats, applied as RetroArch
+ * applies them (retro_cheat_reset, then each one on) after retro_load_game,
+ * before the video driver starts; HARNESS_CHEATS_AT=N again before the Nth
+ * retro_run, as a cheat toggled in RetroArch's menu does.
  * HARNESS_CYCLES=N: the game loaded, run and unloaded N times, the core
  * closed and opened again between, as RetroArch does between games; after
  * each, the core closed, the threads, descriptors, memory and signal
@@ -276,6 +280,29 @@ static void set_ports(const char *spec)
     fflush(stdout);
 }
 
+/* HARNESS_CHEATS's, as RetroArch applies a game's cheats. */
+static void apply_cheats(void)
+{
+    const char *all = getenv("HARNESS_CHEATS");
+    if (!all) {
+        return;
+    }
+    p_retro_cheat_reset();
+    unsigned n = 0;
+    for (const char *p = all;; n++) {
+        const char *bar = strchr(p, '|');
+        char code[512];
+        snprintf(code, sizeof(code), "%.*s", (int)(bar ? (size_t)(bar - p) : strlen(p)), p);
+        p_retro_cheat_set(n, true, code);
+        if (!bar) {
+            break;
+        }
+        p = bar + 1;
+    }
+    printf("cheats: %u applied\n", n + 1);
+    fflush(stdout);
+}
+
 static const char *g_core_path;
 static void *g_core;
 
@@ -479,6 +506,7 @@ static int play(const struct retro_game_info *game, long frames)
     p_retro_get_system_av_info(&av);
     printf("loaded: %ux%u, aspect %.3f\n", av.geometry.base_width, av.geometry.base_height,
            av.geometry.aspect_ratio);
+    apply_cheats();                         /* RetroArch: as the content loads, before its drivers */
     if (g_hw.context_reset) {               /* as RetroArch's video driver starts */
         if (!hv_load() || !hv_create(g_neg)) {
             fprintf(stderr, "FAIL: no Vulkan device for the core\n");
@@ -495,7 +523,12 @@ static int play(const struct retro_game_info *game, long frames)
     long ran = 0;
     const long reset_at = getenv("HARNESS_RESET_AT") ? atol(getenv("HARNESS_RESET_AT")) : -1;
     const long reinit_at = getenv("HARNESS_REINIT_AT") ? atol(getenv("HARNESS_REINIT_AT")) : -1;
+    const long cheats_at = getenv("HARNESS_CHEATS_AT") ? atol(getenv("HARNESS_CHEATS_AT")) : -1;
     for (; ran < frames && !g_shutdown; ran++) {
+        if (ran == cheats_at) {
+            printf("frame %ld: ", ran);
+            apply_cheats();
+        }
         for (const char *p = getenv("HARNESS_PORTS_AT"); p && *p; p = strchr(p, ';') ? strchr(p, ';') + 1 : "") {
             char *end;
             if (strtol(p, &end, 10) == ran && *end == ':') {   /* RetroArch's menu: a port's Device Type */

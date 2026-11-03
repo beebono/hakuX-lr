@@ -34,6 +34,8 @@ set(HLE_PURE_SOURCES
   ${NC_DEPS}/root/subprojects/nv2a_vsh_cpu/src/nv2a_vsh_disassembler.c
 )
 add_library(hle_pure STATIC ${HLE_PURE_SOURCES})
+find_package(Threads REQUIRED)
+target_link_libraries(hle_pure PUBLIC Threads::Threads)   # the frontend cheats' lock
 if(UNIX)
   target_link_libraries(hle_pure PUBLIC m)
 endif()
@@ -74,7 +76,6 @@ target_compile_definitions(test_vkcompat PRIVATE VK_NO_PROTOTYPES)
 # The audio's pure parts, each with only its own sources (no hle_pure): the
 # HRTF filter, the VP's stereo routing (header-only), and the libretro
 # output's ring (native/libretro/audio.c, its frontend and log stood in).
-find_package(Threads REQUIRED)
 function(audio_test name)
   add_executable(${name} ${name}.c ${ARGN})
   target_link_libraries(${name} Threads::Threads)
