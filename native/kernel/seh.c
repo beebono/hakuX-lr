@@ -58,6 +58,7 @@ enum { CONTINUE_EXECUTION, CONTINUE_SEARCH, NESTED_EXCEPTION, COLLIDED_UNWIND };
 
 #define CHAIN_END     0xFFFFFFFFu
 #define STATUS_UNWIND 0xC0000027u
+#define STATUS_ACCESS_VIOLATION 0xC0000005u
 #define CXX_EXCEPTION 0xE06D7363u /* MSVC's throw */
 
 /* A level's guest frame, from its base up:
@@ -203,9 +204,15 @@ static NcSeh *push_level(NcKernel *k, NcFrame *f, NcThread *t, uint32_t esp)
 static void unhandled(NcKernel *k, NcFrame *f, NcSeh *l, const char *why)
 {
     char type[96];
-    nc_kernel_request_stop(k, f, "seh: unhandled exception %08x at %08x (%s)%s%s", rd(k, l->rec + ER_CODE),
-                           rd(k, l->rec + ER_ADDRESS), why, rd(k, l->rec + ER_CODE) == CXX_EXCEPTION ? ", C++ " : "",
-                           rd(k, l->rec + ER_CODE) == CXX_EXCEPTION ? cxx_type(k, l->rec, type, sizeof(type)) : "");
+    const uint32_t code = rd(k, l->rec + ER_CODE);
+    if (code == STATUS_ACCESS_VIOLATION) {
+        snprintf(type, sizeof(type), "%s %08x", rd(k, l->rec + ER_INFO) ? "writing" : "reading",
+                 rd(k, l->rec + ER_INFO + 4));
+    }
+    nc_kernel_request_stop(k, f, "seh: unhandled exception %08x at %08x (%s)%s%s", code, rd(k, l->rec + ER_ADDRESS),
+                           why, code == CXX_EXCEPTION ? ", C++ " : code == STATUS_ACCESS_VIOLATION ? ", " : "",
+                           code == CXX_EXCEPTION ? cxx_type(k, l->rec, type, sizeof(type)) :
+                           code == STATUS_ACCESS_VIOLATION ? type : "");
 }
 
 /* Calls the handler of the level's registration, or ends the level. */
@@ -282,6 +289,60 @@ static uint64_t RtlRaiseException(NcKernel *k, NcFrame *f, const uint32_t *a)
     }
     step(k, f, t);
     return 0;
+}
+
+/* Called when a guest memory access faults in translated code; f holds the
+ * guest state at the faulting instruction. When the Xbox kernel's page-fault
+ * handler can't satisfy an access, it raises STATUS_ACCESS_VIOLATION and lets
+ * the thread's SEH handlers deal with it. This does the same.
+ * ExceptionInformation[0] is 1 for a write and 0 for a read, and [1] is the
+ * address.
+ *
+ * Some titles' file streams depend on this: they only reserve their buffers,
+ * and their exception handler commits and fills each page the first time the
+ * game reads it.
+ *
+ * Returns false if there is no current thread, the thread has no SEH
+ * handler, there is no mapped stack below ESP to run the dispatch on, or the
+ * dispatch can't be set up. The caller then reports the fault as a crash. */
+bool nc_seh_access_violation(NcKernel *k, NcFrame *f, uint32_t va, bool write)
+{
+    NcThread *t = k->current;
+    const uint32_t esp = nc_frame_gpr(f, NC_ESP), eip = nc_frame_eip(f);
+    const uint32_t lo = (esp - LV_SIZE) & ~15u;
+    if (!t || chain_head(k) == CHAIN_END || nc_vm_phys(k->vm, lo) == UINT32_MAX ||
+        nc_vm_phys(k->vm, esp - 1) == UINT32_MAX) {
+        return false;
+    }
+    NcSeh *l = push_level(k, f, t, esp);
+    if (!l) {
+        return false;
+    }
+    /* Under FEX this runs in the SIGSEGV handler, where a store to a
+     * write-tracked page kills the process. Open the level's frame and the
+     * chain head for writing first. */
+    nc_vm_will_write(l->base, LV_SIZE);
+    nc_vm_will_write(k->kpcr_va, 4);
+    l->rec = l->base + LV_REC;
+    uint8_t *r = nc_vm_host(k->vm, l->rec);
+    memset(r, 0, ER_SIZE);
+    nc_wr32(r + ER_CODE, STATUS_ACCESS_VIOLATION);
+    nc_wr32(r + ER_ADDRESS, eip);
+    nc_wr32(r + ER_NPARAMS, 2);
+    nc_wr32(r + ER_INFO, write ? 1u : 0u);
+    nc_wr32(r + ER_INFO + 4, va);
+    capture(k, f, l->ctx, eip, esp);
+    l->reg = chain_head(k);
+    static unsigned s_logged;
+    if (s_logged++ < 32) {
+        nc_log("hakuX-native", "seh: t%u access violation at %08x, %s %08x: to the title's handlers", t->id, eip,
+               write ? "writing" : "reading", va);
+    }
+    /* a chain step() refuses at once (a registration outside the stack):
+     * the fault's own report, with the registers */
+    const bool stopping = k->stop;
+    step(k, f, t);
+    return stopping || !k->stop;
 }
 
 /* RtlUnwind(TargetFrame, TargetIp, ExceptionRecord, ReturnValue): calls the
