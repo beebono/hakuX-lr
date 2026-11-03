@@ -958,7 +958,9 @@ static HleVkTex *tex_find(uint32_t id)
 
 /* Retired textures: the image, its views and memory are destroyed and the
  * bindless slot reused once the timeline passes the work that may sample
- * them (HLE_SURF_PARKED: the submission that closes the open recording). */
+ * them (HLE_SURF_PARKED: the submission that closes the open recording).
+ * TEX_RETIRE_MAX entries at first; full, everything submitted is waited for
+ * (retire_room). */
 #define TEX_RETIRE_MAX 2048
 static struct {
     VkImage img;
@@ -966,8 +968,8 @@ static struct {
     VkDeviceMemory mem;
     uint32_t slot;
     uint64_t after;
-} g_retire[TEX_RETIRE_MAX];
-static unsigned g_nretire;
+} *g_retire;
+static unsigned g_nretire, g_retire_cap;
 static uint32_t g_free_slot[HLE_MAX_IMAGES];
 static unsigned g_nfree_slot;
 static uint64_t g_tex_retired;
@@ -1003,13 +1005,45 @@ void hle_draw_tex_stamp(uint64_t value)
     }
 }
 
+/* Room for one more retired entry. Full: everything submitted is waited
+ * for and reaped. What the open recording retired (HLE_SURF_PARKED) stays
+ * until it is submitted, so a table full of those grows. False (the entry
+ * is leaked) only without the memory. */
+static bool retire_room(void)
+{
+    if (g_nretire < g_retire_cap) {
+        return true;
+    }
+    if (g_retire_cap) {
+        hle_tl_wait(hle_tl_submitted());
+        hle_draw_tex_reap(hle_tl_completed());
+        if (g_nretire < g_retire_cap) {
+            return true;
+        }
+    }
+    const unsigned cap = g_retire_cap ? g_retire_cap * 2 : TEX_RETIRE_MAX;
+    void *r = realloc(g_retire, cap * sizeof(g_retire[0]));
+    if (!r) {
+        static bool s_said;
+        if (!s_said) {
+            s_said = true;
+            hle_log("hakuX-hle-back", "retired textures: no memory for %u: later ones leaked "
+                    "(logged once)", cap);
+        }
+        return false;
+    }
+    if (g_retire_cap) {
+        hle_log("hakuX-hle-back", "retired textures: %u in one recording, the table grows "
+                "to %u", g_nretire, cap);
+    }
+    g_retire = r;
+    g_retire_cap = cap;
+    return true;
+}
+
 static void tex_free(HleVkTex *t)
 {
-    if (t->img) {
-        if (g_nretire == TEX_RETIRE_MAX) {
-            hle_tl_wait(hle_tl_submitted());    /* full: everything before is done */
-            hle_draw_tex_reap(hle_tl_completed());
-        }
+    if (t->img && retire_room()) {
         g_retire[g_nretire++] = (typeof(g_retire[0])){
             .img = t->img, .view = t->view, .cube_view = t->cube_view, .mem = t->mem,
             .slot = t->slot, .after = HLE_SURF_PARKED };
@@ -1201,12 +1235,10 @@ void hle_draw_forget_surf(uint32_t id)
             i++;
             continue;
         }
-        if (g_nretire == TEX_RETIRE_MAX) {
-            hle_tl_wait(hle_tl_submitted());
-            hle_draw_tex_reap(hle_tl_completed());
+        if (retire_room()) {            /* (none: the slot is leaked) */
+            g_retire[g_nretire++] = (typeof(g_retire[0])){
+                .slot = g_dr.sslot[i].slot, .after = HLE_SURF_PARKED };
         }
-        g_retire[g_nretire++] = (typeof(g_retire[0])){
-            .slot = g_dr.sslot[i].slot, .after = HLE_SURF_PARKED };
         g_dr.sslot[i] = g_dr.sslot[--g_dr.nsslot];
     }
 }
@@ -4982,7 +5014,9 @@ void hle_draw_shutdown(void)
     memset(g_smp_hot, 0, sizeof(g_smp_hot));
     g_white_done = false;
     memset(g_tex_map, 0, sizeof(g_tex_map));
-    g_nretire = 0;
+    free(g_retire);
+    g_retire = NULL;
+    g_nretire = g_retire_cap = 0;
     g_nfree_slot = 0;
     g_tex_retired = 0;
     memset(g_snap, 0, sizeof(g_snap));
