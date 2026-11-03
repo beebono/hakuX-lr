@@ -7,6 +7,7 @@ add_library(hakux_libretro SHARED
   "${CMAKE_CURRENT_SOURCE_DIR}/libretro/core.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/libretro/audio.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/libretro/input.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/libretro/mic.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/libretro/video.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/libretro/vulkan.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/libretro/options.c"

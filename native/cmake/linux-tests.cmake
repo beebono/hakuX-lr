@@ -68,9 +68,10 @@ set_tests_properties(nat-smoke PROPERTIES TIMEOUT 60)
 # The USB stack driven as the guest's would: enumeration, input, rumble, and
 # controllers plugged in and pulled out.
 add_executable(usb-smoke "${NC_REPO}/tests/native/usb/usb_test.c" "${NC_REPO}/native/dev/usb.c"
-                         "${NC_REPO}/native/dev/usb_hub.c" "${NC_REPO}/native/dev/xid.c")
+                         "${NC_REPO}/native/dev/usb_hub.c" "${NC_REPO}/native/dev/xid.c"
+                         "${NC_REPO}/native/dev/xblc.c")
 target_include_directories(usb-smoke PRIVATE "${NC_REPO}")
-target_link_libraries(usb-smoke PRIVATE Threads::Threads)
+target_link_libraries(usb-smoke PRIVATE Threads::Threads m)
 add_test(NAME usb-smoke COMMAND usb-smoke)
 set_tests_properties(usb-smoke PROPERTIES TIMEOUT 10)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -94,6 +95,14 @@ if(TARGET hakux_libretro)
   target_link_libraries(rumble-smoke PRIVATE hakux_native)
   add_test(NAME rumble-smoke COMMAND rumble-smoke)
   set_tests_properties(rumble-smoke PROPERTIES TIMEOUT 10)
+  # The Communicator's microphone and headphone through the libretro core's
+  # (RetroArch's microphone stubbed), with the core option's device.
+  add_executable(voice-smoke "${NC_REPO}/tests/native/linux/voice.c" "${NC_REPO}/native/libretro/mic.c"
+                             "${NC_REPO}/native/libretro/audio.c")
+  target_include_directories(voice-smoke PRIVATE "${NC_REPO}")
+  target_link_libraries(voice-smoke PRIVATE hakux_native)
+  add_test(NAME voice-smoke COMMAND voice-smoke)
+  set_tests_properties(voice-smoke PROPERTIES TIMEOUT 20)
   # The core through a minimal frontend: exports, info and a synthetic title.
   add_executable(libretro-harness "${NC_REPO}/tests/native/libretro/harness.c"
                                   "${NC_REPO}/tests/native/libretro/vk.c")

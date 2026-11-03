@@ -66,10 +66,34 @@ void nc_usb_reset(NcUsbDev *d);
 /* d or a device below it with this address. */
 NcUsbDev *nc_usb_find(NcUsbDev *d, uint8_t addr);
 
+/* xid.c: when player 0-3's buttons last went down or up (CLOCK_MONOTONIC ns, 0: never): the
+ * Communicator's noise gate doesn't open for the click. */
+uint64_t nc_xid_last_press_ns(unsigned player);
+
+/* xblc.c: the Xbox Live Communicator (voice chat) for player 0-3; freed
+ * (true) if d is one (nc_usb_dev_free). */
+NcUsbDev *nc_xblc_new(unsigned player);
+bool nc_xblc_free(NcUsbDev *d);
+/* The noise gate of the Communicators made from now on: "off", or a
+ * threshold in dBFS ("-38"); NULL or "": NC_MIC_GATE's (default -38). */
+void nc_xblc_set_gate(const char *gate);
+/* The Communicator's sound for a front end that moves it itself (not on
+ * Android, where AAudio's streams do). nc_xblc_state: player 0-3's
+ * Communicator's sample rate (the title's), 0 if it has none, and the
+ * microphone packets the title asked for so far (growing: it listens; the
+ * headphone's don't count).
+ * nc_xblc_mic_put: n microphone samples at rate (16-bit mono), gated in place
+ * and resampled to the title's. nc_xblc_phone_read: n headphone samples at
+ * rate (silence while the title sends none); returns n, or 0 with no
+ * Communicator. */
+int nc_xblc_state(unsigned player, uint64_t *packets);
+void nc_xblc_mic_put(unsigned player, int16_t *s, int n, int rate);
+int nc_xblc_phone_read(unsigned player, int16_t *out, int n, int rate);
+
 /* usb_hub.c: a hub with nports downstream ports (1-based). */
 NcUsbDev *nc_usb_hub_new(unsigned nports);
-/* A device made by nc_usb_hub_new or nc_xid_gamepad_new freed, with what
- * hangs off it (NULL: nothing). */
+/* A device made by nc_usb_hub_new, nc_xid_gamepad_new or nc_xblc_new freed,
+ * with what hangs off it (NULL: nothing). */
 void nc_usb_dev_free(NcUsbDev *d);
 void nc_usb_hub_attach(NcUsbDev *hub, unsigned port, NcUsbDev *child);
 
@@ -121,6 +145,9 @@ void nc_dev_ohci_free(void);
 /* The players with a controller now (bit n: player n + 1): the others'
  * controllers pulled out, theirs plugged in, as the title would see it. */
 void nc_dev_ohci_set_pads(unsigned mask);
+/* The players whose controller has a Communicator (expansion slot A), from
+ * the next nc_dev_ohci_init on; before a call, NC_VOICE_MASK's (none). */
+void nc_dev_ohci_set_voice(unsigned mask);
 
 #ifdef __cplusplus
 }

@@ -125,6 +125,7 @@ add_library(hakux_native STATIC
   dev/usb.c
   dev/usb_hub.c
   dev/xid.c
+  dev/xblc.c
   dev/ohci.c
   dev/aci.c
   dev/nvnet.c
@@ -169,7 +170,7 @@ target_include_directories(hakux_native PUBLIC "${NC_REPO}")
 target_include_directories(hakux_native PRIVATE "${HAKUX_FEX_DIR}/External/xxhash")
 # The HLE layer's pure modules build without QEMU in this mode.
 target_compile_definitions(hakux_native PRIVATE HLE_HOST_TEST)
-target_link_libraries(hakux_native PUBLIC hakux_hle hakux_apu nc_slirp nc_platform z)
+target_link_libraries(hakux_native PUBLIC hakux_hle hakux_apu nc_slirp nc_platform z m)
 target_compile_options(hakux_native PRIVATE -Wall -Wno-unused-parameter)
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/chd.cmake")
 

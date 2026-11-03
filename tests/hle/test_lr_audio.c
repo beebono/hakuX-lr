@@ -3,19 +3,30 @@
  * frontend that takes all, part or none of what it is offered: the frames it
  * takes leave the ring, the rest are offered again first, in order, nothing
  * lost, repeated or overwritten. Stereo pairs are numbered (left n, right
- * -n - 1) so any loss, repeat or swap shows. Only the frontend and the
- * core's log are stand-ins. */
+ * -n - 1) so any loss, repeat or swap shows. Only the frontend, the core's
+ * log and the Communicator (none) are stand-ins. */
 #include "hle_test.h"
 
 #include <stdarg.h>
 
 #include "native/dev/apu/apu_int.h"
+#include "native/dev/usb.h"
 #include "native/libretro/libretro_int.h"
 
 void nc_log(const char *tag, const char *fmt, ...)
 {
     (void)tag;
     (void)fmt;
+}
+
+/* No Communicator: the headphone has no samples to mix in. */
+int nc_xblc_phone_read(unsigned player, int16_t *out, int frames, int rate)
+{
+    (void)player;
+    (void)out;
+    (void)frames;
+    (void)rate;
+    return 0;
 }
 
 #define FRAME_BYTES 4

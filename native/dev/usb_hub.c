@@ -192,7 +192,7 @@ static void hub_reset(NcUsbDev *d)
 
 /* A hub (its find) frees what hangs off it first; a hub and a gamepad both
  * have their NcUsbDev first (NcUsbDev's layout is the savestate's: no room
- * for a destroy callback). */
+ * for a destroy callback), and a Communicator frees itself (its streams). */
 void nc_usb_dev_free(NcUsbDev *d)
 {
     if (d && d->find == hub_find) {
@@ -201,7 +201,9 @@ void nc_usb_dev_free(NcUsbDev *d)
             nc_usb_dev_free(h->child[p]);
         }
     }
-    free(d);
+    if (!nc_xblc_free(d)) {
+        free(d);
+    }
 }
 
 NcUsbDev *nc_usb_hub_new(unsigned nports)

@@ -1,9 +1,10 @@
 /* Copyright (C) 2026-present PortareOS */
 /*
  * hakuX native core — the libretro core's parts (LIBRETRO_SPEC.md):
- * core.c the ABI and the game's lifecycle, audio.c the APU's output,
- * input.c the RetroPad as the Duke, video.c the frames to RetroArch,
- * options.c the core options, net.c the network option.
+ * core.c the ABI and the game's lifecycle, audio.c the APU's output (and
+ * the Communicator's headphone), input.c the RetroPad as the Duke, mic.c the
+ * Communicator's microphone, video.c the frames to RetroArch, options.c the
+ * core options, net.c the network option.
  */
 #ifndef NATIVE_LIBRETRO_LIBRETRO_INT_H
 #define NATIVE_LIBRETRO_LIBRETRO_INT_H
@@ -29,8 +30,14 @@ void nc_lr_fail(const char *why);
 bool nc_lr_start(void);
 void nc_lr_end(const char *why);
 
-/* audio.c — one period's samples to RetroArch (retro_run). */
+/* audio.c — one period's samples to RetroArch (retro_run), with player 1's
+ * Communicator's headphone mixed in. */
 void nc_lr_audio_run(retro_audio_sample_batch_t batch);
+
+/* mic.c — RetroArch's microphone into player 1's Communicator while the
+ * title moves its audio (retro_run); closed, the game stopping (stop_core). */
+void nc_lr_mic_run(void);
+void nc_lr_mic_stop(void);
 
 /* input.c — each port's RetroPad to its player, and with rumble on (the
  * core option, nc_lr_input_set_rumble) the title's rumble to its motors

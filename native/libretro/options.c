@@ -3,12 +3,14 @@
  * Libretro core options (LIBRETRO_SPEC.md section 10).
  * RetroArch handles display filters and aspect ratio. Crop (video.c),
  * rumble (input.c) and frame pacing (the decoder reads it at each swap)
- * update immediately; other options apply at the next boot.
+ * update immediately; other options apply at the next boot (the
+ * Communicator is plugged into player 1's controller as it boots).
  */
 #include "native/libretro/libretro_int.h"
 #include "native/hle/hle_native.h"
 #include "native/kernel/kernel.h"
 #include "native/dev/dev.h"
+#include "native/dev/usb.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,8 +24,8 @@
 #define AUDIO_PROCESSING_DEFAULT "fast"
 #endif
 
-enum { OPT_SCALE, OPT_CROP, OPT_FORMAT, OPT_LANGUAGE, OPT_REGION, OPT_RUMBLE, OPT_NETWORK, OPT_RESAMPLER,
-       OPT_PROCESSING, OPT_PACE, OPT_COUNT };
+enum { OPT_SCALE, OPT_CROP, OPT_FORMAT, OPT_LANGUAGE, OPT_REGION, OPT_RUMBLE, OPT_NETWORK, OPT_COMMUNICATOR,
+       OPT_MIC_GATE, OPT_RESAMPLER, OPT_PROCESSING, OPT_PACE, OPT_COUNT };
 
 /* The language values follow XC_LANGUAGE after auto: english is 1. */
 static struct retro_core_option_v2_definition g_defs[OPT_COUNT + 1] = {
@@ -83,6 +85,24 @@ static struct retro_core_option_v2_definition g_defs[OPT_COUNT + 1] = {
         {{"disabled", "Off (no cable)"}, {"lan", "LAN (system link)"}, {"insignia", "Xbox Live (Insignia)"},
          {NULL, NULL}},
         "disabled"},
+    [OPT_COMMUNICATOR] = {
+        "hakux_communicator", "Xbox Live Communicator", NULL,
+        "Plugs a Communicator headset into player 1's controller, for voice chat over Xbox Live (Insignia) or "
+        "system link in games that have it. It hears RetroArch's microphone (Settings > Audio > Microphone), "
+        "silence without one, and its headphone plays with the game's sound. The microphone is used only while "
+        "a game's voice chat runs. Experimental." NEXT,
+        NULL, NULL,
+        {{"disabled", "Off"}, {"enabled", "On"}, {NULL, NULL}},
+        "disabled"},
+    [OPT_MIC_GATE] = {
+        "hakux_mic_sensitivity", "Communicator Microphone Sensitivity", NULL,
+        "With the Communicator on: how quiet a sound still counts as talking. Quieter sounds, and sounds that "
+        "aren't a voice (buttons, sticks, a fan), are muted, so the game doesn't show you as talking for them. "
+        "Always on sends everything the microphone hears." NEXT,
+        NULL, NULL,
+        {{"medium", "Medium"}, {"low", "Low (only clear speech)"}, {"high", "High (quiet voices too)"},
+         {"off", "Always on (no noise gate)"}, {NULL, NULL}},
+        "medium"},
     [OPT_RESAMPLER] = {
         "hakux_audio_resampler", "Audio Resampler", NULL,
         "Converts game audio to 48 kHz. Sinc preserves high frequencies and reduces aliasing. "
@@ -242,16 +262,27 @@ void nc_lr_options_apply(void)
 
     const char *network = g_defs[OPT_NETWORK].values[g_applied[OPT_NETWORK]].value;
     nc_lr_net_apply(network);
+    /* the noise gate's threshold in dBFS, as the app's sensitivities */
+    const bool communicator = !strcmp(g_defs[OPT_COMMUNICATOR].values[g_applied[OPT_COMMUNICATOR]].value, "enabled");
+    const char *sensitivity = g_defs[OPT_MIC_GATE].values[g_applied[OPT_MIC_GATE]].value;
+    const char *gate = !strcmp(sensitivity, "low")    ? "-30"
+                       : !strcmp(sensitivity, "high") ? "-46"
+                       : !strcmp(sensitivity, "off")  ? "off"
+                                                      : "-38";
+    nc_dev_ohci_set_voice(communicator ? 1 : 0);
+    nc_xblc_set_gate(gate);
     const bool sinc = !strcmp(g_defs[OPT_RESAMPLER].values[g_applied[OPT_RESAMPLER]].value, "sinc");
     nc_dev_apu_set_resampler(sinc);
     const bool dsp = !strcmp(g_defs[OPT_PROCESSING].values[g_applied[OPT_PROCESSING]].value, "dsp");
     nc_dev_apu_set_dsp(dsp);
     nc_hle_set_frame_pace(pace_depth(g_applied[OPT_PACE]));
     nc_log("hakuX-libretro", "options: render scale %dx, overscan %s, screen %s, language %d (%s), video region %s, "
-           "rumble %s, network %s, resampler %s, audio processing %s, frame pacing %s", scale,
-           crop ? "cropped" : "shown", format, language, g_defs[OPT_LANGUAGE].values[g_applied[OPT_LANGUAGE]].value,
-           region, rumble ? "on" : "off", strcmp(network, "disabled") ? network : "off", sinc ? "sinc" : "linear",
-           dsp ? "dsp" : "fast", pace_text(g_applied[OPT_PACE]));
+           "rumble %s, network %s, resampler %s, audio processing %s, frame pacing %s, communicator %s%s%s",
+           scale, crop ? "cropped" : "shown", format, language,
+           g_defs[OPT_LANGUAGE].values[g_applied[OPT_LANGUAGE]].value, region, rumble ? "on" : "off",
+           strcmp(network, "disabled") ? network : "off", sinc ? "sinc" : "linear", dsp ? "dsp" : "fast",
+           pace_text(g_applied[OPT_PACE]), communicator ? "on (noise gate " : "off", communicator ? gate : "",
+           communicator ? ")" : "");
 }
 
 void nc_lr_options_run(void)

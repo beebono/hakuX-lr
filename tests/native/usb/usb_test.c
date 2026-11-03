@@ -4,12 +4,18 @@
  * hub and its gamepad through OHCI EDs and TDs in fake guest RAM, then reads
  * a report and sends rumble. Then the controllers on the root ports, as
  * nc_dev_ohci_init makes them: plugged in before the boot and while the
- * console runs (nc_pad_plug), pulled out, and enumerated again.
+ * console runs (nc_pad_plug), pulled out, and enumerated again. Then an Xbox
+ * Live Communicator in player 1's controller (xblc.c): its isochronous
+ * endpoints through chained isochronous TDs, a TD whose frames went by, one
+ * for a later frame, isochronous processing switched off (HcControl.IE),
+ * and the microphone's noise gate.
  *
- *   cc -O1 -I. tests/native/usb/usb_test.c native/dev/usb.c native/dev/usb_hub.c native/dev/xid.c -lpthread
+ *   cc -O1 -I. tests/native/usb/usb_test.c native/dev/usb.c native/dev/usb_hub.c native/dev/xid.c \
+ *      native/dev/xblc.c -lpthread -lm
  *
  * The build's usb-smoke test (native/cmake/linux-tests.cmake) is this.
  */
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -97,7 +103,9 @@ static Ohci *o = &g_ohci;
 #define HCCA   0x10000u
 #define ED_CTL 0x11000u
 #define ED_INT 0x11100u
+#define ED_ISO 0x11200u
 #define TDS    0x12000u
+#define ITDS   0x13000u
 #define BUFS   0x20000u
 
 static uint32_t rd(uint32_t pa)
@@ -270,6 +278,104 @@ static int interrupt_in(uint8_t addr, uint8_t ep, uint8_t *data, uint16_t len)
     const int n = cbp ? (int)(cbp - (BUFS + 0x200)) : len;
     memcpy(data, g_ram + BUFS + 0x200, n);
     return n;
+}
+
+/* An isochronous TD for frames sf.., a packet a frame of the sizes given, in
+ * the page of buf from buf on. */
+static void itd(uint32_t pa, uint16_t sf, unsigned di, uint32_t buf, const unsigned *sizes, unsigned n,
+                uint32_t next)
+{
+    uint16_t off[8] = {0};
+    uint32_t at = buf & 0xfffu;
+    for (unsigned i = 0; i < n; i++) {
+        off[i] = (uint16_t)(0xe000u | at);  /* CC: not accessed */
+        at += sizes[i];
+    }
+    wr(pa, (0xfu << 28) | ((n - 1) << 24) | (di << 21) | sf);
+    wr(pa + 4, buf & ~0xfffu);
+    wr(pa + 8, next);
+    wr(pa + 12, (buf & ~0xfffu) + at - 1);
+    for (unsigned i = 0; i < 4; i++) {
+        wr(pa + 16 + 4 * i, off[2 * i] | (uint32_t)off[2 * i + 1] << 16);
+    }
+}
+
+static uint16_t psw(uint32_t pa, unsigned n)
+{
+    return nc_rd16(g_ram + pa + 16 + 2 * n);
+}
+
+/* An isochronous ED (in: IN, else OUT) from head to tail, on every frame's
+ * interrupt list. */
+static void iso_ed(uint8_t addr, uint8_t ep, bool in, uint32_t head, uint32_t tail)
+{
+    wr(ED_ISO, addr | ((uint32_t)ep << 7) | ((in ? 2u : 1u) << 11) | ED_F | (48u << 16));
+    wr(ED_ISO + 4, tail);
+    wr(ED_ISO + 8, head);
+    wr(ED_ISO + 12, 0);
+    for (int i = 0; i < 32; i++) {
+        wr(HCCA + 4 * i, ED_ISO);
+    }
+}
+
+/* Frames until the done queue arrives (at most max); returns it, or 0. */
+static uint32_t frames_until_done(int max)
+{
+    for (int i = 0; i < max; i++) {
+        frame(o);
+        if (reg(0x0C) & INT_WDH) {
+            const uint32_t d = rd(HCCA + 0x84);
+            wr(HCCA + 0x84, 0);
+            set_reg(0x0C, INT_WDH);
+            return d & ~1u;
+        }
+    }
+    return 0;
+}
+
+/* The microphone's noise gate on Communicator c (player 2, 16 kHz): n
+ * samples of gen through it, 10 ms at a time; the loudest output sample
+ * from sample `from` on. */
+static int gated(NcUsbDev *c, int16_t (*gen)(unsigned), unsigned n, unsigned from)
+{
+    static unsigned t;          /* the signal's time, in samples */
+    int loudest = 0;
+    for (unsigned done = 0; done < n; done += 160) {
+        int16_t s[160];
+        for (unsigned i = 0; i < 160; i++) {
+            s[i] = gen(t++);
+        }
+        nc_xblc_mic_put(1, s, 160, 16000);
+        uint8_t pkt[48];
+        unsigned at = done;
+        for (int r; (r = c->data(c, true, 5, pkt, 48)) > 0;) {
+            for (int i = 0; i + 1 < r; i += 2, at++) {
+                const int v = abs((int16_t)nc_rd16(pkt + i));
+                loudest = at >= from && v > loudest ? v : loudest;
+            }
+        }
+    }
+    return loudest;
+}
+
+static int16_t silence(unsigned t)
+{
+    return 0;
+}
+
+/* Broadband noise at -20 dBFS RMS: as loud as a voice, no pitch (a stick, a fan). */
+static int16_t noise(unsigned t)
+{
+    static uint32_t seed = 12345;
+    seed = seed * 1103515245u + 12345u;
+    return (int16_t)((int)(seed >> 16 & 0x7fff) * 2 * 5676 / 0x7fff - 5676);
+}
+
+/* A voiced sound: 150 Hz and two harmonics, about -20 dBFS. */
+static int16_t voice(unsigned t)
+{
+    const double w = 2 * M_PI * 150 * t / 16000;
+    return (int16_t)(4000 * sin(w) + 2400 * sin(2 * w) + 1600 * sin(3 * w));
 }
 
 static void hub_port(uint8_t addr, uint16_t port, uint16_t feature, bool set)
@@ -474,6 +580,170 @@ int main(void)
     nc_dev_ohci_stop();
     CHECK(o->dev[2] && o->dev[3] && o->dev[0] && !o->dev[1]);
     nc_dev_ohci_free();
+
+    /* Player 1's controller with a Communicator in expansion slot A (hub port
+     * 2), its noise gate off: the samples as they are. */
+    uint64_t packets = 1;
+    CHECK(nc_xblc_state(0, &packets) == 0 && packets == 0);
+    nc_dev_ohci_set_pads(1);
+    nc_dev_ohci_set_voice(1);
+    nc_xblc_set_gate("off");
+    nc_dev_ohci_init(&g_vm);
+    nc_dev_ohci_stop();
+    set_reg(0x08, CS_HCR);
+    set_reg(0x18, HCCA);
+    set_reg(0x10, INT_MIE | INT_WDH | INT_RHSC);
+    set_reg(0x04, HCFS_OPERATIONAL | CTL_PLE | CTL_IE | CTL_CLE | CTL_BLE);
+    set_reg(0x5C, PORT_CSC);
+    set_reg(0x5C, PORT_PRS);
+    set_reg(0x5C, PORT_PRSC);
+    CHECK(control(0, 0x00, 5, 1, 0, NULL, 0) == 0);
+    CHECK(control(1, 0x00, 9, 1, 0, NULL, 0) == 0);
+    for (uint16_t p = 1; p <= 3; p++) {
+        hub_port(1, p, 8, true);
+    }
+    CHECK((hub_port_status(1, 2) & 1) && !(hub_port_status(1, 3) & 1));    /* slot B empty */
+    enumerate_on_hub_port(1, 1, 2, desc);
+    CHECK(nc_rd16(desc + 10) == 0x0202);
+    enumerate_on_hub_port(1, 2, 3, desc);
+    CHECK(nc_rd16(desc + 8) == 0x045e && nc_rd16(desc + 10) == 0x0283);
+    CHECK(control(3, 0x80, 6, 0x0200, 0, desc, 64) == 45);
+    CHECK(desc[14] == 0x78 && desc[20] == 0x04 && desc[21] == 0x01);       /* headphone: isochronous OUT 4 */
+    CHECK(desc[32] == 0x78 && desc[38] == 0x85 && desc[39] == 0x01);       /* microphone: isochronous IN 5 */
+    CHECK(control(3, 0x41, 3, 2, 0, NULL, 0) == 0);         /* SET_FEATURE: 16 kHz */
+    CHECK(control(3, 0x41, 3, 1, 1, NULL, 0) == 0);         /* AGC */
+    CHECK(control(3, 0x41, 3, 9, 0, NULL, 0) == -CC_STALL); /* no such rate */
+    CHECK(nc_xblc_state(0, &packets) == 16000 && packets == 0);
+
+    /* The headphone: six TDs of eight 1 ms packets (16 samples each, 48 ms),
+     * chained, only the last asking for the interrupt. They retire as their
+     * last frame goes, newest first on the done queue. */
+    const unsigned out_pkts[8] = {32, 32, 32, 32, 32, 32, 32, 32};
+    uint16_t sf = (uint16_t)(o->frame_number + 1);
+    for (unsigned k = 0; k < 6; k++) {
+        itd(ITDS + 0x20 * k, (uint16_t)(sf + 8 * k), k == 5 ? 0 : 7, BUFS + 0x1000 + 0x100 * k, out_pkts, 8,
+            ITDS + 0x20 * (k + 1));
+    }
+    for (unsigned i = 0; i < 6 * 8 * 16; i++) {
+        nc_wr16(g_ram + BUFS + 0x1000 + 2 * i, (uint16_t)(1000 + i));
+    }
+    iso_ed(3, 4, false, ITDS, ITDS + 0xC0);
+    uint32_t done = frames_until_done(60);
+    CHECK(done == ITDS + 0xA0);
+    for (unsigned k = 6; k-- > 0 && done;) {
+        CHECK(done == ITDS + 0x20 * k && td_cc(done) == CC_NOERROR);
+        for (unsigned i = 0; i < 8; i++) {
+            CHECK(psw(done, i) == 0);                       /* NoError; an OUT's size is 0 */
+        }
+        done = rd(done + 8);
+    }
+    CHECK((rd(ED_ISO + 8) & PTR_MASK) == ITDS + 0xC0 && !(rd(ED_ISO + 8) & ED_H));
+    CHECK(nc_xblc_state(0, &packets) == 16000 && packets == 0);    /* the headphone's don't count */
+    static int16_t heard[768];
+    CHECK(nc_xblc_phone_read(0, heard, 768, 16000) == 768);
+    int wrong = 0;
+    for (unsigned i = 0; i < 768; i++) {
+        wrong += heard[i] != (int16_t)(1000 + i);
+    }
+    CHECK(wrong == 0);
+    CHECK(nc_xblc_phone_read(0, heard, 16, 16000) == 16 && heard[0] == 0 && heard[15] == 0);   /* run dry */
+    CHECK(nc_xblc_phone_read(3, heard, 16, 16000) == 0);   /* player 4 has none */
+
+    /* The microphone: 40 samples queued; three 48-byte packets take 24, 16
+     * and none. */
+    int16_t said[40];
+    for (unsigned i = 0; i < 40; i++) {
+        said[i] = (int16_t)(-2000 - (int)i);
+    }
+    nc_xblc_mic_put(0, said, 40, 16000);
+    const unsigned in_pkts[3] = {48, 48, 48};
+    itd(ITDS, (uint16_t)(o->frame_number + 1), 0, BUFS + 0x2000, in_pkts, 3, ITDS + 0x20);
+    memset(g_ram + BUFS + 0x2000, 0x55, 144);
+    iso_ed(3, 5, true, ITDS, ITDS + 0x20);
+    CHECK(frames_until_done(8) == ITDS && td_cc(ITDS) == CC_NOERROR);
+    CHECK(psw(ITDS, 0) == 48 && psw(ITDS, 1) == 32 && psw(ITDS, 2) == 0);
+    CHECK(nc_xblc_state(0, &packets) == 16000 && packets == 3);     /* the microphone's do, empty ones too */
+    wrong = 0;
+    for (unsigned i = 0; i < 40; i++) {
+        wrong += (int16_t)nc_rd16(g_ram + BUFS + 0x2000 + (i < 24 ? 2 * i : 48 + 2 * (i - 24))) != said[i];
+    }
+    CHECK(wrong == 0);
+
+    /* A TD whose frames went by retires with DataOverrun, its packet not
+     * accessed; one for a later frame waits for it. */
+    const unsigned one[1] = {32};
+    itd(ITDS, (uint16_t)(o->frame_number - 10), 0, BUFS + 0x2000, one, 1, ITDS + 0x20);
+    iso_ed(3, 4, false, ITDS, ITDS + 0x20);
+    CHECK(frames_until_done(2) == ITDS && td_cc(ITDS) == CC_DATAOVERRUN && (psw(ITDS, 0) >> 12) == 0xe);
+    itd(ITDS, (uint16_t)(o->frame_number + 4), 0, BUFS + 0x2000, one, 1, ITDS + 0x20);
+    iso_ed(3, 4, false, ITDS, ITDS + 0x20);
+    CHECK(!frames_until_done(3) && (rd(ED_ISO + 8) & PTR_MASK) == ITDS && (psw(ITDS, 0) >> 12) == 0xe);
+    CHECK(frames_until_done(1) == ITDS && psw(ITDS, 0) == 0);
+
+    /* Nobody at the address: the packet's status says so. */
+    itd(ITDS, (uint16_t)(o->frame_number + 1), 0, BUFS + 0x2000, one, 1, ITDS + 0x20);
+    iso_ed(9, 4, false, ITDS, ITDS + 0x20);
+    CHECK(frames_until_done(2) == ITDS && psw(ITDS, 0) >> 12 == CC_DEVICENOTRESPONDING);
+
+    /* With HcControl.IE clear the periodic list stops at the isochronous ED.
+     * The gamepad's interrupt ED before it still runs. The microphone's TD
+     * waits and its buffer isn't written. Once IE is set again, the TD's
+     * frame has passed and it retires with DataOverrun. */
+    set_reg(0x04, HCFS_OPERATIONAL | CTL_PLE | CTL_CLE | CTL_BLE);
+    itd(ITDS, (uint16_t)(o->frame_number + 1), 0, BUFS + 0x2000, in_pkts, 1, ITDS + 0x20);
+    memset(g_ram + BUFS + 0x2000, 0x55, 48);
+    iso_ed(3, 5, true, ITDS, ITDS + 0x20);
+    td(TDS + 0x100, PID_IN, 0, true, 0, BUFS + 0x200, 20, TDS + 0x110);
+    td(TDS + 0x110, 0, 0, false, 7, 0, 0, 0);
+    wr(ED_INT, 2 | (2u << 7) | (2u << 11) | (64u << 16));
+    wr(ED_INT + 4, TDS + 0x110);
+    wr(ED_INT + 8, TDS + 0x100);
+    wr(ED_INT + 12, ED_ISO);
+    for (int i = 0; i < 32; i++) {
+        wr(HCCA + 4 * i, ED_INT);
+    }
+    CHECK(frames_until_done(3) == TDS + 0x100 && td_cc(TDS + 0x100) == CC_NOERROR);
+    CHECK(!frames_until_done(3));
+    CHECK((rd(ED_ISO + 8) & PTR_MASK) == ITDS && (psw(ITDS, 0) >> 12) == 0xe && g_ram[BUFS + 0x2000] == 0x55);
+    set_reg(0x04, HCFS_OPERATIONAL | CTL_PLE | CTL_IE | CTL_CLE | CTL_BLE);
+    CHECK(frames_until_done(1) == ITDS && td_cc(ITDS) == CC_DATAOVERRUN && g_ram[BUFS + 0x2000] == 0x55);
+    for (int i = 0; i < 32; i++) {
+        wr(HCCA + 4 * i, 0);
+    }
+
+    /* The gamepad beside it still reports. */
+    pad = (NcPadState){.buttons = NC_PAD_START};
+    nc_pad_set(0, &pad);
+    CHECK(interrupt_in(2, 2, desc, 20) == 20 && nc_rd16(desc + 2) == NC_PAD_START);
+
+    /* Freed with the console: the front end finds none. */
+    nc_dev_ohci_free();
+    CHECK(nc_xblc_state(0, &packets) == 0);
+    nc_dev_ohci_set_voice(0);
+
+    /* The noise gate (-38 dBFS): silence, and a loud sound without a pitch,
+     * stay silent; a voice opens it, and it closes 400 ms after the voice
+     * ends (and a 30 ms fade). Under a -10 dBFS threshold the voice is too
+     * quiet. */
+    nc_xblc_set_gate(NULL);
+    NcUsbDev *c = nc_xblc_new(1);
+    int loud[6];
+    loud[0] = gated(c, silence, 16000, 0);
+    loud[1] = gated(c, noise, 16000, 0);
+    loud[2] = gated(c, silence, 8000, 0);
+    loud[3] = gated(c, voice, 8000, 4000);
+    loud[4] = gated(c, noise, 8000, 0);         /* the hold (and the voice's last 30 ms): the noise passes */
+    loud[5] = gated(c, noise, 16000, 0);        /* closed again */
+    nc_usb_dev_free(c);
+    printf("  gate's loudest out: silence %d, noise %d, voice %d, noise after it %d then %d\n", loud[0], loud[1],
+           loud[3], loud[4], loud[5]);
+    CHECK(!loud[0] && !loud[1] && !loud[2] && loud[3] > 2000 && loud[4] > 2000 && !loud[5]);
+    nc_xblc_set_gate("-10");
+    c = nc_xblc_new(1);
+    CHECK(gated(c, silence, 16000, 0) == 0);
+    CHECK(gated(c, voice, 8000, 0) == 0);
+    nc_usb_dev_free(c);
+    nc_xblc_set_gate(NULL);
 
     printf(g_fail ? "usb_test: %d FAILED\n" : "usb_test: all passed\n", g_fail);
     return g_fail != 0;

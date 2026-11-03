@@ -286,6 +286,14 @@ the jitter. Start with at most two periods of ring; measure occupancy and
 grow only with evidence. Paused: the ring keeps its contents and grows no
 further. Reset clears it.
 
+Player 1's Xbox Live Communicator (`hakux_communicator`, off by default) has
+its headphone mixed into the same output, 3 dB down in each channel, after
+the ring is read: the APU's pacing never sees it. Its microphone is
+RetroArch's (`RETRO_ENVIRONMENT_GET_MICROPHONE_INTERFACE`), read in
+`retro_run` only while the title moves the Communicator's audio, and closed
+when the title stops, the core stops, or the Communicator is gone; without
+one the title hears silence.
+
 ## 9. Controls
 
 Read RetroPad state once per `retro_run` and publish it per port.
@@ -356,6 +364,9 @@ Options (`options.c`): only what the emulator backs.
   on `retro_run`: RetroArch's menu, a pause or a frame it never takes can't
   hold it, and the stop's kick ends it. RetroArch's pace already reaches the
   guest through the vblank lock (section 5) and the title's FLIP_STALL.
+- The Xbox Live Communicator (off by default; experimental): a headset in
+  expansion slot A of player 1's controller for voice chat, with its
+  microphone's noise-gate sensitivity (medium, low, high, or off).
 
 Insignia's NAT backend forwards the console's UDP 3074 through the device's
 UDP 3074 and requests a router forward through UPnP for Open NAT. Without
