@@ -592,6 +592,14 @@ static void RepProgress(NcCpu* cpu, FEXCore::Core::CPUState& S, const ucontext_t
   if (EFlags & (1u << 10)) {
     return;
   }
+  // FEAT_MOPS (CPY*/SET*, which FEX emits when the host has them): partway
+  // through, the registers' form is the CPU's choice (Option A holds the end
+  // address in Xd and the count negated), so x1 isn't the next element. The
+  // copy starts over there, as before.
+  const uint32_t HostInsn = *reinterpret_cast<const uint32_t*>(uc->uc_mcontext.pc);
+  if ((HostInsn & 0x3B200C00u) == 0x19000400u) {
+    return;
+  }
   const auto* Membase = static_cast<const uint8_t*>(cpu->Sys.Cfg.membase);
   const auto* Insn = Membase + static_cast<uint32_t>(S.rip);
   bool Rep = false, Op16 = false;
