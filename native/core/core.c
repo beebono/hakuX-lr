@@ -529,7 +529,11 @@ enum NcGuestFault nc_core_guest_fault(NcCore *c, const NcGuestAccess *a, const c
         nc_log("hakuX-native-frontier", "guest fault at %08x (wrapped address), eip %08x", a->va,
                nc_frame_eip(f));
     }
-    if (!nc_kernel_page_fault(&c->kernel, f, a->va, a->write)) {
+    /* As the Xbox kernel: the title's page-fault handler, else the access
+     * violation raised to the thread's SEH handlers (Serious Sam's streams
+     * commit their pages there) */
+    if (!nc_kernel_page_fault(&c->kernel, f, a->va, a->write) &&
+        !nc_seh_access_violation(&c->kernel, f, a->va, a->write)) {
         *why = "the title doesn't handle it";
         return NC_GF_DECLINED;
     }
