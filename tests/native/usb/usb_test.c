@@ -7,7 +7,8 @@
  * console runs (nc_pad_plug), pulled out, and enumerated again. Then an Xbox
  * Live Communicator in player 1's controller (xblc.c): its isochronous
  * endpoints through chained isochronous TDs, a TD whose frames went by, one
- * for a later frame, and the microphone's noise gate.
+ * for a later frame, isochronous processing switched off (HcControl.IE),
+ * and the microphone's noise gate.
  *
  *   cc -O1 -I. tests/native/usb/usb_test.c native/dev/usb.c native/dev/usb_hub.c native/dev/xid.c \
  *      native/dev/xblc.c -lpthread -lm
@@ -592,7 +593,7 @@ int main(void)
     set_reg(0x08, CS_HCR);
     set_reg(0x18, HCCA);
     set_reg(0x10, INT_MIE | INT_WDH | INT_RHSC);
-    set_reg(0x04, HCFS_OPERATIONAL | CTL_PLE | CTL_CLE | CTL_BLE);
+    set_reg(0x04, HCFS_OPERATIONAL | CTL_PLE | CTL_IE | CTL_CLE | CTL_BLE);
     set_reg(0x5C, PORT_CSC);
     set_reg(0x5C, PORT_PRS);
     set_reg(0x5C, PORT_PRSC);
@@ -682,6 +683,32 @@ int main(void)
     itd(ITDS, (uint16_t)(o->frame_number + 1), 0, BUFS + 0x2000, one, 1, ITDS + 0x20);
     iso_ed(9, 4, false, ITDS, ITDS + 0x20);
     CHECK(frames_until_done(2) == ITDS && psw(ITDS, 0) >> 12 == CC_DEVICENOTRESPONDING);
+
+    /* With HcControl.IE clear the periodic list stops at the isochronous ED.
+     * The gamepad's interrupt ED before it still runs. The microphone's TD
+     * waits and its buffer isn't written. Once IE is set again, the TD's
+     * frame has passed and it retires with DataOverrun. */
+    set_reg(0x04, HCFS_OPERATIONAL | CTL_PLE | CTL_CLE | CTL_BLE);
+    itd(ITDS, (uint16_t)(o->frame_number + 1), 0, BUFS + 0x2000, in_pkts, 1, ITDS + 0x20);
+    memset(g_ram + BUFS + 0x2000, 0x55, 48);
+    iso_ed(3, 5, true, ITDS, ITDS + 0x20);
+    td(TDS + 0x100, PID_IN, 0, true, 0, BUFS + 0x200, 20, TDS + 0x110);
+    td(TDS + 0x110, 0, 0, false, 7, 0, 0, 0);
+    wr(ED_INT, 2 | (2u << 7) | (2u << 11) | (64u << 16));
+    wr(ED_INT + 4, TDS + 0x110);
+    wr(ED_INT + 8, TDS + 0x100);
+    wr(ED_INT + 12, ED_ISO);
+    for (int i = 0; i < 32; i++) {
+        wr(HCCA + 4 * i, ED_INT);
+    }
+    CHECK(frames_until_done(3) == TDS + 0x100 && td_cc(TDS + 0x100) == CC_NOERROR);
+    CHECK(!frames_until_done(3));
+    CHECK((rd(ED_ISO + 8) & PTR_MASK) == ITDS && (psw(ITDS, 0) >> 12) == 0xe && g_ram[BUFS + 0x2000] == 0x55);
+    set_reg(0x04, HCFS_OPERATIONAL | CTL_PLE | CTL_IE | CTL_CLE | CTL_BLE);
+    CHECK(frames_until_done(1) == ITDS && td_cc(ITDS) == CC_DATAOVERRUN && g_ram[BUFS + 0x2000] == 0x55);
+    for (int i = 0; i < 32; i++) {
+        wr(HCCA + 4 * i, 0);
+    }
 
     /* The gamepad beside it still reports. */
     pad = (NcPadState){.buttons = NC_PAD_START};

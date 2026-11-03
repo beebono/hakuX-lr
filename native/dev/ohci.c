@@ -565,9 +565,20 @@ static bool service_list(Ohci *o, uint32_t head, bool periodic)
         if (!rd_words(o, pa, ed, 4)) {
             break;
         }
-        if (periodic && (ed[0] & (ED_K | ED_F)) == ED_F) {
-            /* isochronous (the Communicator's audio): this frame's packet */
-            if (!(ed[2] & ED_H) && (ed[2] & PTR_MASK) != (ed[1] & PTR_MASK)) {
+        if (periodic && (ed[0] & ED_F)) {
+            /* Isochronous (the Communicator's audio): this frame's packet.
+             * With HcControl.IE clear the periodic list stops at the first
+             * isochronous ED (OpenHCI 7.1.2); they come after the interrupt
+             * EDs. */
+            if (!(o->ctl & CTL_IE)) {
+                static bool logged;
+                if (!logged) {
+                    logged = true;
+                    nc_log("hakuX-native-usb", "ohci: isochronous EDs skipped: HcControl.IE is clear");
+                }
+                break;
+            }
+            if (!(ed[0] & ED_K) && !(ed[2] & ED_H) && (ed[2] & PTR_MASK) != (ed[1] & PTR_MASK)) {
                 active = true;
                 service_itd(o, pa, ed);
             }
