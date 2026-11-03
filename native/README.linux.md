@@ -178,8 +178,8 @@ The Xbox Live Communicator (`native/dev/xblc.c`, from rfandango/hakuX#28) is
 the controller headset for voice chat over Insignia or system link. It sits
 in expansion slot A of player 1's controller (slot B stays empty: there are
 no memory units). Its microphone is RetroArch's (**Settings → Audio →
-Microphone**), opened only while a game's voice chat moves audio
-(`native/libretro/mic.c`); without one the game hears silence. A noise gate
+Microphone**), opened only while a game's voice chat reads the Communicator's
+microphone (`native/libretro/mic.c`); without one the game hears silence. A noise gate
 mutes sounds that aren't a voice, such as buttons and sticks; **Communicator
 Microphone Sensitivity** sets its threshold. The headset's sound is mixed into the game's
 output, 3 dB down in each channel. Voice with another player is untested.

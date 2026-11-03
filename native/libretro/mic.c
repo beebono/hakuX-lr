@@ -5,14 +5,15 @@
  * (RETRO_ENVIRONMENT_GET_MICROPHONE_INTERFACE) into player 1's Communicator
  * (native/dev/xblc.c), read each retro_run.
  *
- * The microphone is open only while the title moves the Communicator's
- * audio (in a game's voice chat; not in its menus, nor in a game without
- * voice): opened as the packets start, at the title's rate (RetroArch
- * resamples to it, the device whatever still differs), and closed once they
- * stop for IDLE_RUNS, as the core stops (nc_lr_mic_stop) and as the
- * Communicator goes. Each retro_run reads the samples of the time since the
- * last one, so the read doesn't wait on the microphone. With no microphone
- * (RetroArch has none, or none opens) the Communicator hears silence.
+ * The microphone is open only while the title reads the Communicator's
+ * microphone (in a game's voice chat; not in its menus, nor in a game
+ * without voice, nor for the headphone alone): opened as its packets start,
+ * at the title's rate (RetroArch resamples to it, the device whatever still
+ * differs), and closed once they stop for IDLE_RUNS, as the core stops
+ * (nc_lr_mic_stop) and as the Communicator goes. Each retro_run reads the
+ * samples of the time since the last one, so the read doesn't wait on the
+ * microphone. With no microphone (RetroArch has none, or none opens) the
+ * Communicator hears silence.
  */
 #include "native/libretro/libretro_int.h"
 #include "native/dev/usb.h"
@@ -28,8 +29,8 @@ static struct {
     bool asked;                 /* for it, since the core started */
     retro_microphone_t *handle;
     unsigned rate;              /* what is read: the microphone's, else the title's (silence) */
-    bool active;                /* the title moves audio */
-    uint64_t packets;           /* its packets, as last seen */
+    bool active;                /* the title reads the microphone */
+    uint64_t packets;           /* its microphone packets, as last seen */
     unsigned idle;              /* retro_runs since they last grew */
     uint64_t last_ns;           /* the last read */
     uint64_t acc;               /* the samples' remainder, in 1/1e9 of one */
@@ -102,7 +103,7 @@ void nc_lr_mic_run(void)
     if (!rate || !packets || g_mic.idle >= IDLE_RUNS) {
         if (g_mic.active) {
             g_mic.active = false;
-            nc_log("hakuX-libretro", "communicator: the title stopped moving audio");
+            nc_log("hakuX-libretro", "communicator: the title stopped reading the microphone");
             mic_close();
         }
         return;

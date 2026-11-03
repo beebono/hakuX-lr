@@ -638,7 +638,7 @@ int main(void)
         done = rd(done + 8);
     }
     CHECK((rd(ED_ISO + 8) & PTR_MASK) == ITDS + 0xC0 && !(rd(ED_ISO + 8) & ED_H));
-    CHECK(nc_xblc_state(0, &packets) == 16000 && packets == 48);
+    CHECK(nc_xblc_state(0, &packets) == 16000 && packets == 0);    /* the headphone's don't count */
     static int16_t heard[768];
     CHECK(nc_xblc_phone_read(0, heard, 768, 16000) == 768);
     int wrong = 0;
@@ -662,6 +662,7 @@ int main(void)
     iso_ed(3, 5, true, ITDS, ITDS + 0x20);
     CHECK(frames_until_done(8) == ITDS && td_cc(ITDS) == CC_NOERROR);
     CHECK(psw(ITDS, 0) == 48 && psw(ITDS, 1) == 32 && psw(ITDS, 2) == 0);
+    CHECK(nc_xblc_state(0, &packets) == 16000 && packets == 3);     /* the microphone's do, empty ones too */
     wrong = 0;
     for (unsigned i = 0; i < 40; i++) {
         wrong += (int16_t)nc_rd16(g_ram + BUFS + 0x2000 + (i < 24 ? 2 * i : 48 + 2 * (i - 24))) != said[i];

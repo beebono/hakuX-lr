@@ -16,8 +16,8 @@
  * open on a thread of their own when the title first moves audio (the
  * microphone isn't held until a game uses it), and again at each rate it
  * sets. Elsewhere the front end moves the samples itself (the libretro
- * core, native/libretro/mic.c and audio.c): it asks whether the title moves
- * audio (nc_xblc_state), feeds the microphone (nc_xblc_mic_put) and takes
+ * core, native/libretro/mic.c and audio.c): it asks whether the title reads
+ * the microphone (nc_xblc_state), feeds it (nc_xblc_mic_put) and takes
  * the headphone's samples at its own rate (nc_xblc_phone_read).
  *
  * A noise gate sits on the microphone (NC_MIC_GATE, dBFS; "off" for none):
@@ -96,7 +96,7 @@ typedef struct Xblc {
     int16_t phone_prev;          /* nc_xblc_phone_read's: the sample before phone_last */
     bool phone_primed;           /* it holds PHONE_FILL_MS: it plays */
     bool started;                /* the title has moved audio: the streams are open */
-    uint64_t packets;            /* the isochronous packets it moved (nc_xblc_state) */
+    uint64_t mic_packets;        /* the microphone packets the title asked for (nc_xblc_state) */
 #ifdef __ANDROID__
     pthread_mutex_t streams;     /* opening and closing */
     AAudioStream *in, *out;
@@ -523,8 +523,8 @@ static int xblc_data(NcUsbDev *d, bool in, int ep, uint8_t *buf, int len)
     const bool start = !x->started;
     x->started = true;
     int n = 0;
-    x->packets++;
     if (in && ep == XBLC_EP_IN) {
+        x->mic_packets++;
         /* what the microphone has, up to the packet (an empty one: nothing yet) */
         int16_t v;
         while (n + 2 <= len && ring_get(&x->mic, &v)) {
@@ -667,7 +667,7 @@ int nc_xblc_state(unsigned player, uint64_t *packets)
         return 0;
     }
     const int rate = x->rate;
-    *packets = x->packets;
+    *packets = x->mic_packets;
     unlock_player(x);
     return rate;
 }

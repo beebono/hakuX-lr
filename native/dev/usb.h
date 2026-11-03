@@ -80,7 +80,8 @@ void nc_xblc_set_gate(const char *gate);
 /* The Communicator's sound for a front end that moves it itself (not on
  * Android, where AAudio's streams do). nc_xblc_state: player 0-3's
  * Communicator's sample rate (the title's), 0 if it has none, and the
- * isochronous packets the title moved so far (growing: it uses voice).
+ * microphone packets the title asked for so far (growing: it listens; the
+ * headphone's don't count).
  * nc_xblc_mic_put: n microphone samples at rate (16-bit mono), gated in place
  * and resampled to the title's. nc_xblc_phone_read: n headphone samples at
  * rate (silence while the title sends none); returns n, or 0 with no

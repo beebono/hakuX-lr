@@ -1,10 +1,11 @@
 /* Copyright (C) 2026-present PortareOS */
 /* The libretro core's Communicator (native/libretro/mic.c and audio.c) with
  * the real device (native/dev/xblc.c), the title's USB frames played here:
- * RetroArch's microphone opens only once the title moves the Communicator's
- * audio, at the title's rate; what it hears reaches the title's microphone
- * packets (resampled when RetroArch gives another rate), silence without
- * one; it closes when the title stops and when the core stops. The
+ * RetroArch's microphone opens only once the title reads the Communicator's
+ * microphone (not for the headphone alone), at the title's rate; what it
+ * hears reaches the title's microphone packets (resampled when RetroArch
+ * gives another rate), silence without one; it closes when the title stops
+ * and when the core stops. The
  * headphone's samples are mixed into the core's output 3 dB down in both
  * channels, none lost when the frontend takes part of a period, and without
  * a Communicator the output is the APU's as it was. No guest, renderer or
@@ -96,6 +97,7 @@ bool nc_lr_env(unsigned cmd, void *data)
 }
 
 static NcUsbDev *g_c;
+static bool g_phone_only;       /* the title's frames ask nothing of the microphone */
 
 /* What the title's microphone packets carried since the last count. */
 static struct {
@@ -112,6 +114,9 @@ static void title_frames(unsigned n, int16_t out)
             nc_wr16(pkt + 2 * i, (uint16_t)out);
         }
         g_c->data(g_c, false, 4, pkt, 32);
+        if (g_phone_only) {
+            continue;
+        }
         const int r = g_c->data(g_c, true, 5, pkt, 32);
         g_in.empty += r == 0;
         for (int i = 0; i + 1 < r; i += 2) {
@@ -194,12 +199,18 @@ int main(void)
     for (int i = 0; i < 10; i++) {
         nc_lr_mic_run();
     }
-    check(g_fake.opened == 0, "the microphone stays closed until the title moves the Communicator's audio");
+    check(g_fake.opened == 0, "the microphone stays closed until the title reads the Communicator's microphone");
+
+    /* It plays to the headphone alone: still closed. */
+    const uint8_t rate16k[8] = {0x41, 0x03, 2, 0, 0, 0, 0, 0};
+    g_c->control(g_c, rate16k, NULL, 0);
+    g_phone_only = true;
+    runs(20, 0);
+    g_phone_only = false;
+    check(g_fake.opened == 0, "the headphone's packets alone don't open it");
 
     /* In its voice chat: open at the title's rate; after a lead of silence
      * the title's packets carry what it hears. */
-    const uint8_t rate16k[8] = {0x41, 0x03, 2, 0, 0, 0, 0, 0};
-    g_c->control(g_c, rate16k, NULL, 0);
     title_frames(1, 0);
     runs(40, 0);
     printf("  opened %u at %u Hz, read %zu samples; packets: %u samples (%u heard, %u silent, %u other), %u empty\n",
