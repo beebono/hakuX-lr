@@ -2,8 +2,9 @@
 # Copyright (C) 2026-present PortareOS
 """Check build/package/hakux-<version>-<architecture>.tar.gz after linux-package.sh,
 in the image that built it, and write its .sha256: the commit's archive, an
-native core that reports the version and loads (retro_* exports only, no
-RUNPATH, no SDL), within PortareOS's glibc 2.38 and GLIBCXX 3.4.31.
+native core with the DSP JIT that reports the version and loads (retro_*
+exports only, no RUNPATH, no SDL), within PortareOS's glibc 2.38 and
+GLIBCXX 3.4.31.
     python3 tools/native/linux-verify.py <version>
 """
 from pathlib import Path
@@ -40,6 +41,7 @@ with tarfile.open(archive) as tar:
     build_info = tar.extractfile(f'{name}/BUILD-INFO').read().decode()
     assert 'source ' + revision in build_info
     assert 'architecture ' + arch in build_info
+    assert 'DSP JIT on' in build_info, 'the core has no DSP JIT'
     assert 'libchdr' in build_info
     assert tar.extractfile(f'{name}/lib/libretro/hakux_libretro.so').read() == core.read_bytes()
 
