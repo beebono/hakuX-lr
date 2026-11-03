@@ -64,6 +64,10 @@ systemctl start portarelauncher
   Vulkan 1.2 drivers use a compatibility path, which can be slower:
   the core's log then says `compat: Vulkan below 1.3`, or names the missing
   feature if the driver can't run the core.
+- **Vulkan loader:** `libvulkan.so.1` 1.3 or newer, even with a 1.2 driver.
+  The core asks for a Vulkan 1.3 instance, and RetroArch refuses it on an
+  older loader: `Core requests apiVersion 1.3, but it is not supported by
+  loader`.
 - **RetroArch:** with its `vulkan` video driver. 1.22.2 as PortareOS builds it
   is tested. Other video drivers copy frames through the CPU and are intended
   for diagnostics.

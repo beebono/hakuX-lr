@@ -9,7 +9,9 @@
   use the renderer's compatibility path: render passes instead of dynamic
   rendering, and Vulkan 1.0 barriers and submits instead of
   synchronization2. The core logs `compat: Vulkan below 1.3` on that path
-  (it said `Vulkan 1.1` for 1.2 drivers as well).
+  (it said `Vulkan 1.1` for 1.2 drivers as well). The Vulkan loader
+  (`libvulkan.so.1`) must still be 1.3 or newer, and the setup script
+  warns about an older one.
 
 ### Fixes
 
