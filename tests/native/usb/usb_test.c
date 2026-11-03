@@ -7,7 +7,7 @@
  * console runs (nc_pad_plug), pulled out, and enumerated again.
  *
  *   cc -O1 -I. tests/native/usb/usb_test.c native/dev/usb.c native/dev/usb_hub.c native/dev/xid.c \
- *      native/dev/xblc.c -lpthread
+ *      native/dev/xblc.c -lpthread -lm
  *
  * The build's usb-smoke test (native/cmake/linux-tests.cmake) is this.
  */

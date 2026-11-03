@@ -71,7 +71,7 @@ add_executable(usb-smoke "${NC_REPO}/tests/native/usb/usb_test.c" "${NC_REPO}/na
                          "${NC_REPO}/native/dev/usb_hub.c" "${NC_REPO}/native/dev/xid.c"
                          "${NC_REPO}/native/dev/xblc.c")
 target_include_directories(usb-smoke PRIVATE "${NC_REPO}")
-target_link_libraries(usb-smoke PRIVATE Threads::Threads)
+target_link_libraries(usb-smoke PRIVATE Threads::Threads m)
 add_test(NAME usb-smoke COMMAND usb-smoke)
 set_tests_properties(usb-smoke PROPERTIES TIMEOUT 10)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)

@@ -263,6 +263,25 @@ static int xid_control(NcUsbDev *d, const uint8_t *s, uint8_t *data, int len)
     }
 }
 
+static _Atomic uint64_t g_last_press_ns[XID_PLAYERS];
+static uint32_t g_pressed[XID_PLAYERS];     /* the frame thread's */
+
+uint64_t nc_xid_last_press_ns(unsigned player)
+{
+    return player < XID_PLAYERS ? g_last_press_ns[player] : 0;
+}
+
+/* The buttons that click: the digital ones, and the analog ones (A B X Y,
+ * black, white, the triggers) past a quarter. */
+static uint32_t pressed(const uint8_t *r)
+{
+    uint32_t m = (uint32_t)(r[2] | r[3] << 8);
+    for (int i = 0; i < 8; i++) {
+        m |= (uint32_t)(r[4 + i] > 0x40) << (16 + i);
+    }
+    return m;
+}
+
 static int xid_data(NcUsbDev *d, bool in, int ep, uint8_t *buf, int len)
 {
     Xid *x = (Xid *)d;
@@ -286,6 +305,13 @@ static int xid_data(NcUsbDev *d, bool in, int ep, uint8_t *buf, int len)
                        s_last[x->player], b, r[4]);
             }
             s_last[x->player] = b;
+            const uint32_t p = pressed(r);
+            if (p != g_pressed[x->player]) {
+                struct timespec ts;
+                clock_gettime(CLOCK_MONOTONIC, &ts);
+                g_last_press_ns[x->player] = (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec;
+                g_pressed[x->player] = p;
+            }
         }
         const int n = MIN(len, 20);
         memcpy(buf, r, n);
@@ -310,6 +336,8 @@ NcUsbDev *nc_xid_gamepad_new(unsigned player)
     pthread_mutex_lock(&g_lock);
     g_rumble[x->player][0] = g_rumble[x->player][1] = 0;
     pthread_mutex_unlock(&g_lock);
+    g_last_press_ns[x->player] = 0;     /* nor the last title's buttons */
+    g_pressed[x->player] = 0;
     x->dev.name = "gamepad";
     x->dev.dev_desc = k_dev_desc;
     x->dev.dev_desc_len = sizeof(k_dev_desc);
