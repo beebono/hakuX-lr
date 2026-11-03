@@ -44,6 +44,11 @@ target_link_libraries(apu-resample-smoke PRIVATE hakux_native m)
 target_link_options(apu-resample-smoke PRIVATE -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc)
 add_test(NAME apu-resample-smoke COMMAND apu-resample-smoke)
 set_tests_properties(apu-resample-smoke PROPERTIES TIMEOUT 60)
+# Check ADPCM reserved bytes and step-index clamping.
+add_executable(apu-adpcm-test "${NC_REPO}/tests/native/apu/adpcm_test.c")
+target_include_directories(apu-adpcm-test PRIVATE "${NC_REPO}")
+add_test(NAME apu-adpcm-test COMMAND apu-adpcm-test)
+set_tests_properties(apu-adpcm-test PROPERTIES TIMEOUT 10)
 # The kernel's crypto (SHA-1, HMAC, DES, RC4, modexp, the drive's signature).
 add_executable(xc-test "${NC_REPO}/tests/native/xc/xc_test.c" "${NC_REPO}/native/kernel/xc_crypto.c")
 target_include_directories(xc-test PRIVATE "${NC_REPO}")

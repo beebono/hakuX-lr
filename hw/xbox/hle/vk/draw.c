@@ -889,43 +889,78 @@ static void white_init(VkCommandBuffer cb)
 
 /* ---- textures ------------------------------------------------------------------ */
 
-/* Lookup by id (many per draw): a per-id hint, checked on use, and misses
- * remembered until a texture is created (g_tex_gen). */
-#define TEX_IDS 8193
-static uint16_t g_tex_hint[TEX_IDS];
-static uint32_t g_tex_miss[TEX_IDS], g_tex_gen = 1;
+/* Lookup by id (many per draw): an open-addressed index of the live ones,
+ * id -> slot + 1 (linear probing, removal by backward shift). It was a hint
+ * per id below 8193 and misses remembered until a texture was created:
+ * ids past that (a long session's: Sega GT 2002 defines ~100 textures a
+ * second) and each surface sampled as a texture after any creation scanned
+ * all HLE_MAX_TEX slots, several times a draw (~4% of the render thread
+ * mid-race, growing). */
+#define TEX_MAP 4096                    /* a power of two, twice HLE_MAX_TEX */
+static uint16_t g_tex_map[TEX_MAP];
+
+static unsigned tex_map_home(uint32_t id)
+{
+    return (id * 2654435761u) >> (32 - 12);
+}
+
+static void tex_map_put(const HleVkTex *t)
+{
+    unsigned i = tex_map_home(t->id);
+    while (g_tex_map[i]) {
+        i = (i + 1) & (TEX_MAP - 1);
+    }
+    g_tex_map[i] = (uint16_t)(t - g_dr.tex + 1);
+}
+
+static void tex_map_del(const HleVkTex *t)
+{
+    const uint16_t v = (uint16_t)(t - g_dr.tex + 1);
+    unsigned i = tex_map_home(t->id);
+    while (g_tex_map[i] && g_tex_map[i] != v) {
+        i = (i + 1) & (TEX_MAP - 1);
+    }
+    if (!g_tex_map[i]) {
+        return;
+    }
+    /* the entries after it in its run that may not stay behind a gap move up */
+    for (unsigned k = i;;) {
+        g_tex_map[i] = 0;
+        for (;;) {
+            k = (k + 1) & (TEX_MAP - 1);
+            if (!g_tex_map[k]) {
+                return;
+            }
+            const unsigned h = tex_map_home(g_dr.tex[g_tex_map[k] - 1].id);
+            /* home cyclically in (i, k]: it stays */
+            if (i <= k ? (h <= i || h > k) : (h <= i && h > k)) {
+                break;
+            }
+        }
+        g_tex_map[i] = g_tex_map[k];
+        i = k;
+    }
+}
 
 static HleVkTex *tex_find(uint32_t id)
 {
     if (!id) {
         return NULL;
     }
-    if (id < TEX_IDS) {
-        unsigned h = g_tex_hint[id];
-        if (h && g_dr.tex[h - 1].id == id) {
-            return &g_dr.tex[h - 1];
+    for (unsigned i = tex_map_home(id); g_tex_map[i]; i = (i + 1) & (TEX_MAP - 1)) {
+        HleVkTex *t = &g_dr.tex[g_tex_map[i] - 1];
+        if (t->id == id) {
+            return t;
         }
-        if (g_tex_miss[id] == g_tex_gen) {
-            return NULL;
-        }
-    }
-    for (unsigned i = 0; i < HLE_MAX_TEX; i++) {
-        if (g_dr.tex[i].id == id) {
-            if (id < TEX_IDS) {
-                g_tex_hint[id] = i + 1;
-            }
-            return &g_dr.tex[i];
-        }
-    }
-    if (id < TEX_IDS) {
-        g_tex_miss[id] = g_tex_gen;
     }
     return NULL;
 }
 
 /* Retired textures: the image, its views and memory are destroyed and the
  * bindless slot reused once the timeline passes the work that may sample
- * them (HLE_SURF_PARKED: the submission that closes the open recording). */
+ * them (HLE_SURF_PARKED: the submission that closes the open recording).
+ * TEX_RETIRE_MAX entries at first; full, everything submitted is waited for
+ * (retire_room). */
 #define TEX_RETIRE_MAX 2048
 static struct {
     VkImage img;
@@ -933,8 +968,8 @@ static struct {
     VkDeviceMemory mem;
     uint32_t slot;
     uint64_t after;
-} g_retire[TEX_RETIRE_MAX];
-static unsigned g_nretire;
+} *g_retire;
+static unsigned g_nretire, g_retire_cap;
 static uint32_t g_free_slot[HLE_MAX_IMAGES];
 static unsigned g_nfree_slot;
 static uint64_t g_tex_retired;
@@ -970,16 +1005,51 @@ void hle_draw_tex_stamp(uint64_t value)
     }
 }
 
+/* Room for one more retired entry. Full: everything submitted is waited
+ * for and reaped. What the open recording retired (HLE_SURF_PARKED) stays
+ * until it is submitted, so a table full of those grows. False (the entry
+ * is leaked) only without the memory. */
+static bool retire_room(void)
+{
+    if (g_nretire < g_retire_cap) {
+        return true;
+    }
+    if (g_retire_cap) {
+        hle_tl_wait(hle_tl_submitted());
+        hle_draw_tex_reap(hle_tl_completed());
+        if (g_nretire < g_retire_cap) {
+            return true;
+        }
+    }
+    const unsigned cap = g_retire_cap ? g_retire_cap * 2 : TEX_RETIRE_MAX;
+    void *r = realloc(g_retire, cap * sizeof(g_retire[0]));
+    if (!r) {
+        static bool s_said;
+        if (!s_said) {
+            s_said = true;
+            hle_log("hakuX-hle-back", "retired textures: no memory for %u: later ones leaked "
+                    "(logged once)", cap);
+        }
+        return false;
+    }
+    if (g_retire_cap) {
+        hle_log("hakuX-hle-back", "retired textures: %u in one recording, the table grows "
+                "to %u", g_nretire, cap);
+    }
+    g_retire = r;
+    g_retire_cap = cap;
+    return true;
+}
+
 static void tex_free(HleVkTex *t)
 {
-    if (t->img) {
-        if (g_nretire == TEX_RETIRE_MAX) {
-            hle_tl_wait(hle_tl_submitted());    /* full: everything before is done */
-            hle_draw_tex_reap(hle_tl_completed());
-        }
+    if (t->img && retire_room()) {
         g_retire[g_nretire++] = (typeof(g_retire[0])){
             .img = t->img, .view = t->view, .cube_view = t->cube_view, .mem = t->mem,
             .slot = t->slot, .after = HLE_SURF_PARKED };
+    }
+    if (t->id) {
+        tex_map_del(t);
     }
     memset(t, 0, sizeof(*t));
 }
@@ -1043,13 +1113,14 @@ void hle_draw_cmd_tex(const HleCmdTex *c, VkCommandBuffer cb)
         *t = (HleVkTex){ .id = c->id, .xfmt = c->xfmt, .w = c->w, .h = c->h, .d = cd,
                          .levels = c->levels, .faces = c->faces, .fmt = tf.fmt,
                          .vol = cd > 1 };
-        g_tex_gen++;                    /* remembered misses may now hit */
+        tex_map_put(t);
         if (!make_image(t, &tf, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)) {
             static unsigned s_fail;
             if (s_fail++ < 8) {
                 hle_log("hakuX-hle-back", "texture %u (%ux%u fmt 0x%x): image not created "
                         "(sampled white)", c->id, c->w, c->h, c->xfmt);
             }
+            tex_map_del(t);
             t->id = 0;
             return;
         }
@@ -1164,12 +1235,10 @@ void hle_draw_forget_surf(uint32_t id)
             i++;
             continue;
         }
-        if (g_nretire == TEX_RETIRE_MAX) {
-            hle_tl_wait(hle_tl_submitted());
-            hle_draw_tex_reap(hle_tl_completed());
+        if (retire_room()) {            /* (none: the slot is leaked) */
+            g_retire[g_nretire++] = (typeof(g_retire[0])){
+                .slot = g_dr.sslot[i].slot, .after = HLE_SURF_PARKED };
         }
-        g_retire[g_nretire++] = (typeof(g_retire[0])){
-            .slot = g_dr.sslot[i].slot, .after = HLE_SURF_PARKED };
         g_dr.sslot[i] = g_dr.sslot[--g_dr.nsslot];
     }
 }
@@ -1730,8 +1799,9 @@ static VkSamplerAddressMode addr_mode(uint32_t a)
 }
 
 /* sampler_index, one per stage a draw: the index last found for the key's
- * hash, before the scan */
-static uint16_t g_smp_hot[64];
+ * hash, before the scan (64 of them collided often enough to be ~2% of the
+ * render thread) */
+static uint16_t g_smp_hot[1024];
 
 /* Colour c (r, g, b, a) as a texel through component mapping sw (hle_sw_pack) */
 static void sw_apply(uint16_t sw, const float *c, float *o)
@@ -1792,7 +1862,7 @@ static uint32_t sampler_index(const uint32_t *tss, uint32_t lod_down, uint16_t s
         sw = 0;
     }
     uint64_t key2 = tss[TSS_MIPMAPLODBIAS] | (uint64_t)lod_down << 32 | (uint64_t)sw << 48;
-    unsigned h = (unsigned)(((key ^ key2 * 0x9E3779B97F4A7C15ull) * 0xFF51AFD7ED558CCDull) >> 58);
+    unsigned h = (unsigned)(((key ^ key2 * 0x9E3779B97F4A7C15ull) * 0xFF51AFD7ED558CCDull) >> 54);
     uint32_t i = g_smp_hot[h];
     if (i < g_dr.nsmp && g_dr.smp[i].key == key && g_dr.smp[i].key2 == key2) {
         return i;
@@ -4943,10 +5013,10 @@ void hle_draw_shutdown(void)
     g_key_bytes = offsetof(PipeKey, vi);
     memset(g_smp_hot, 0, sizeof(g_smp_hot));
     g_white_done = false;
-    memset(g_tex_hint, 0, sizeof(g_tex_hint));
-    memset(g_tex_miss, 0, sizeof(g_tex_miss));
-    g_tex_gen = 1;
-    g_nretire = 0;
+    memset(g_tex_map, 0, sizeof(g_tex_map));
+    free(g_retire);
+    g_retire = NULL;
+    g_nretire = g_retire_cap = 0;
     g_nfree_slot = 0;
     g_tex_retired = 0;
     memset(g_snap, 0, sizeof(g_snap));

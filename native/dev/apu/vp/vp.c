@@ -1408,7 +1408,11 @@ static int voice_get_samples(MCPXAPUState *d, uint8_t *c, uint32_t v,
                 segment_length = apu_ram_ld32(addr + 4);
             }
         }
-        assert(segment_offset != 0);
+        /* The guest may not have filled this SSL entry yet. Retry next cycle
+         * without advancing the stream. */
+        if (!APU_CHECK(segment_offset != 0)) {
+            return -1;
+        }
         assert(segment_length != 0);
         seg_len = (segment_length >> 0) & 0xffff;
         seg_cs = (segment_length >> 16) & 3;
@@ -1416,7 +1420,11 @@ static int voice_get_samples(MCPXAPUState *d, uint8_t *c, uint32_t v,
         seg_s = (segment_length >> 23) & 1;
         assert(seg_cs == container_size_index);
         assert((seg_spb + 1) == samples_per_block);
-        assert(seg_s == stereo);
+        /* Keep the voice's channel layout when the segment disagrees. */
+        if (seg_s != stereo) {
+            DPRINTF("Voice %d: segment stereo=%d, voice stereo=%d\n", v, seg_s, stereo);
+            seg_s = stereo;
+        }
         container_size_index = seg_cs;
         if (seg_cs == NV_PAVS_VOICE_CFG_FMT_CONTAINER_SIZE_ADPCM) {
             sample_size = NV_PAVS_VOICE_CFG_FMT_SAMPLE_SIZE_S24;
