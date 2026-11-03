@@ -7,7 +7,7 @@ See [TESTING.md](../TESTING.md) for installation and device testing.
 
 ## Build and check
 
-Install Clang 19, CMake, Ninja, Git, Python 3, Rust 1.96.0, zlib development
+Install Clang 19, CMake, Ninja, Git, Python 3, Rust 1.99.1, zlib development
 files and Linux UAPI headers on an ARM64 Linux host. The supplied container
 includes these tools. Dependencies are pinned in
 [linux-deps.json](../tools/native/linux-deps.json), including FEX's required
