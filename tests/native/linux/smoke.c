@@ -278,6 +278,55 @@ int main(int argc, char **argv)
     printf("  protection race: %u rounds, %u stores unseen\n", race_rounds, race_unseen);
     check(race_rounds == RACE_ROUNDS && race_unseen == 0,
           "every guest store after another thread protects its page is seen");
+
+    /* A read of an unmapped page goes to the thread's SEH handler while
+     * write tracking has the stack page read-only. Under FEX the dispatch
+     * runs in the SIGSEGV handler, so its stores to the stack must not fault.
+     * The handler reports the exception code. */
+    uint32_t stack_pa;
+    check(nc_vm_alloc_at(&core.vm, 0x26000, NC_PAGE, &stack_pa), "a stack page for an access violation");
+    const uint32_t seh_reg = 0x26F00;
+    nc_wr32(nc_vm_host(&core.vm, seh_reg), 0xFFFFFFFFu); /* Next: the end of the chain */
+    nc_wr32(nc_vm_host(&core.vm, seh_reg + 4), 0x10580); /* Handler */
+    const uint32_t kpcr = core.kernel.kpcr_va;
+    nc_wr32(nc_vm_host(&core.vm, kpcr), seh_reg);     /* ExceptionList */
+    nc_wr32(nc_vm_host(&core.vm, kpcr + 4), 0x27000); /* StackBase */
+    nc_wr32(nc_vm_host(&core.vm, kpcr + 8), 0x26000); /* StackLimit */
+    core.kernel.current = &core.kernel.threads[0];
+    hle_host_mem_test_and_clear(stack_pa, NC_PAGE);
+    check(!hle_host_mem_dirty(stack_pa), "stack page is tracked and read-only");
+    /* mov eax, [0x30000000]; hlt (ESP 0x26F00) */
+    const uint8_t violate[] = {0xa1, 0x00, 0x00, 0x00, 0x30, 0xf4};
+    /* handler: mov eax, [esp+4] (ExceptionRecord); mov eax, [eax]; int 42h; hlt */
+    const uint8_t handler[] = {0x8b, 0x44, 0x24, 0x04, 0x8b, 0x00, 0xcd, 0x42, 0xf4};
+    memcpy(nc_vm_host(&core.vm, 0x10500), violate, sizeof(violate));
+    memcpy(nc_vm_host(&core.vm, 0x10580), handler, sizeof(handler));
+    result = 0;
+    nc_context_init(core.cpu, &context, 0x10500, seh_reg);
+    nc_cpu_run(core.cpu, &context);
+    check(result == 0xC0000005u, "access violation dispatched to the SEH handler over a tracked stack");
+    check(hle_host_mem_dirty(stack_pa), "the dispatch's stack writes are tracked");
+    core.kernel.current = NULL;
+
+    /* The same fault with a page-fault handler in the IDT: its interrupt
+     * frame goes on the tracked stack. The handler reports the faulting EIP. */
+    const uint32_t gate = core.kernel.idt_va + 8 * 14;
+    const uint32_t gate_lo = nc_rd32(nc_vm_host(&core.vm, gate));
+    const uint32_t gate_hi = nc_rd32(nc_vm_host(&core.vm, gate + 4));
+    nc_wr32(nc_vm_host(&core.vm, gate), (0x08u << 16) | 0x0600u);
+    nc_wr32(nc_vm_host(&core.vm, gate + 4), 0x00010000u | 0x8E00u);
+    hle_host_mem_test_and_clear(stack_pa, NC_PAGE);
+    check(!hle_host_mem_dirty(stack_pa), "stack page is tracked again");
+    /* handler: mov eax, [esp+4] (EIP); int 42h; hlt */
+    const uint8_t pf_handler[] = {0x8b, 0x44, 0x24, 0x04, 0xcd, 0x42, 0xf4};
+    memcpy(nc_vm_host(&core.vm, 0x10600), pf_handler, sizeof(pf_handler));
+    result = 0;
+    nc_context_init(core.cpu, &context, 0x10500, seh_reg);
+    nc_cpu_run(core.cpu, &context);
+    check(result == 0x10500u, "page fault delivered to the IDT's handler over a tracked stack");
+    check(hle_host_mem_dirty(stack_pa), "the interrupt frame's stack writes are tracked");
+    nc_wr32(nc_vm_host(&core.vm, gate), gate_lo);
+    nc_wr32(nc_vm_host(&core.vm, gate + 4), gate_hi);
     if (argc > 1 && !strcmp(argv[1], "--host-fault")) {
         /* Host code writing the reservation's low guard, after the CPU ran:
          * nc_core_fault must decline it rather than resume it as the guest's. */

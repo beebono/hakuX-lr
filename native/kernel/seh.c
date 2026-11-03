@@ -318,6 +318,11 @@ bool nc_seh_access_violation(NcKernel *k, NcFrame *f, uint32_t va, bool write)
     if (!l) {
         return false;
     }
+    /* Under FEX this runs in the SIGSEGV handler, where a store to a
+     * write-tracked page kills the process. Open the level's frame and the
+     * chain head for writing first. */
+    nc_vm_will_write(l->base, LV_SIZE);
+    nc_vm_will_write(k->kpcr_va, 4);
     l->rec = l->base + LV_REC;
     uint8_t *r = nc_vm_host(k->vm, l->rec);
     memset(r, 0, ER_SIZE);

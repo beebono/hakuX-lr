@@ -1399,7 +1399,9 @@ bool nc_kernel_page_fault(NcKernel *k, NcFrame *f, uint32_t va, bool write)
     }
     /* As a ring-0 interrupt gate: EFLAGS, CS, EIP (the faulting instruction,
      * which runs again after IRET) and the error code (not present,
-     * supervisor, W for a write); IF clears. */
+     * supervisor, W for a write); IF clears. Under FEX this runs in the
+     * SIGSEGV handler: open the stack for writing first. */
+    nc_vm_will_write(esp, 16);
     nc_vm_wr32(k->vm, esp + 12, nc_frame_eflags(f));
     nc_vm_wr32(k->vm, esp + 8, nc_frame_cs(f));
     nc_vm_wr32(k->vm, esp + 4, nc_frame_eip(f));
