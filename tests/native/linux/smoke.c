@@ -154,6 +154,12 @@ int main(int argc, char **argv)
     nc_vm_prot_hook = prot_hook;
     check(nc_vm_init(&core.vm, 64u << 20), "memfd VM initialization");
     check(nc_kernel_init(&core.kernel, &core.vm), "replacement kernel initialization");
+    /* Keep the title memory between the kernel and top reserve free at boot. */
+    bool layouts_free = true;
+    for (uint32_t pa = NC_KERNEL_PA + NC_KERNEL_SIZE; pa < core.vm.ram_size - NC_TOP_RESERVE; pa += NC_PAGE) {
+        layouts_free = layouts_free && !core.vm.page_used[pa / NC_PAGE];
+    }
+    check(layouts_free, "kernel boot leaves the titles' fixed physical layouts free");
     check(nc_vm_alloc_at(&core.vm, 0x10000, NC_PAGE, NULL), "guest code page");
     uint32_t pa;
     check(nc_vm_alloc_at(&core.vm, 0x20000, NC_PAGE, &pa), "guest data page");
