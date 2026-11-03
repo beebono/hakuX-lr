@@ -2013,7 +2013,7 @@ static void voice_process(MCPXAPUState *d, uint8_t *c,
 
     /* Deinterleave samples[32][2] into per-channel contiguous buffers once
      * (amortized across 8 subsequent mix_one_bin calls). mix_one_bin
-     * (NEON-accelerated on aarch64) reads contiguous float[32]. */
+     * (NEON on aarch64, SSE2/AVX2 on x86-64) reads contiguous float[32]. */
     float channel_buf[2][NUM_SAMPLES_PER_FRAME];
     for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
         channel_buf[0][i] = samples[i][0];
@@ -2691,6 +2691,10 @@ void mcpx_apu_vp_init(MCPXAPUState *d)
     d->vp.voice_cache = NULL;
     d->vp.ssl_cache = NULL;
 
+#if defined(__x86_64__)
+    /* the vector paths (simd.h): the CPU's again, NC_APU_SIMD's cap */
+    nc_log("hakuX-apu", "vector paths: %s", vp_simd_name(vp_simd_init()));
+#endif
     /* The voices' resampler quality: the content's (g_apu_config.resampler),
      * for the session; each voice's is made at its first VOICE_ON
      * (voice_reset_filters) */

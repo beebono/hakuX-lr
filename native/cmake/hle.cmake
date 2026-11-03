@@ -113,6 +113,7 @@ add_library(hakux_apu STATIC
   ${NC_APU}/dsp/gp_probe.c
   ${NC_APU}/vp/resample.c
   ${NC_APU}/vp/resample_sinc.c
+  ${NC_APU}/vp/simd.c
   ${NC_APU}/vp/vp.c
 )
 # The DSP56300 JIT (Cranelift) on Linux, AArch64 and x86-64 alike.

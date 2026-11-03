@@ -83,7 +83,7 @@ function(audio_test name)
   endif()
   add_test(NAME ${name} COMMAND ${name})
 endfunction()
-audio_test(test_apu_hrtf)
+audio_test(test_apu_hrtf ${REPO_ROOT}/native/dev/apu/vp/simd.c)
 audio_test(test_apu_stereo)
 audio_test(test_lr_audio ${REPO_ROOT}/native/libretro/audio.c)
 # The voices' resamplers: linear, and sinc where the host is AArch64
