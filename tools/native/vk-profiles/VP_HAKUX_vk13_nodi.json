@@ -1,0 +1,28 @@
+{
+    "$schema": "https://schema.khronos.org/vulkan/profiles-0.8-latest.json#",
+    "capabilities": {
+        "nodi": {
+            "extensions": {},
+            "features": {
+                "VkPhysicalDeviceVulkan12Features": {
+                    "runtimeDescriptorArray": false,
+                    "descriptorBindingPartiallyBound": false,
+                    "descriptorBindingSampledImageUpdateAfterBind": false,
+                    "shaderSampledImageArrayNonUniformIndexing": false
+                }
+            },
+            "properties": {}
+        }
+    },
+    "profiles": {
+        "VP_HAKUX_vk13_nodi": {
+            "version": 1,
+            "api-version": "1.3.0",
+            "label": "hakuX: Vulkan 1.3 device without descriptor indexing",
+            "description": "Vulkan 1.3 without the bindless set's descriptor indexing features (Arm's Mali-G52 driver).",
+            "contributors": {},
+            "history": [ { "revision": 1, "date": "2026-11-03", "author": "PortareOS", "comment": "Vulkan 1.3 without descriptor indexing" } ],
+            "capabilities": [ "nodi" ]
+        }
+    }
+}
