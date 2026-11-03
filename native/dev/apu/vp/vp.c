@@ -489,6 +489,8 @@ static bool voice_spin_lock(MCPXAPUState *d, uint16_t v, bool may_retry)
         for (unsigned i = 1;; i++) {
 #if defined(__aarch64__)
             __asm__ __volatile__("yield" ::: "memory");
+#elif defined(__x86_64__)
+            __builtin_ia32_pause();
 #endif
             if (!__atomic_load_n(&d->vp.voice_spinlocks[v].v, __ATOMIC_RELAXED) &&
                 apu_spin_trylock(&d->vp.voice_spinlocks[v])) {
@@ -2298,6 +2300,8 @@ static VoiceTake voice_take(MCPXAPUState *d, uint8_t *c, uint16_t v)
                 } else if (us < HELD_SPIN_US) {
 #if defined(__aarch64__)
                     __asm__ __volatile__("yield" ::: "memory");
+#elif defined(__x86_64__)
+                    __builtin_ia32_pause();
 #endif
                 } else {
                     usleep(HELD_NAP_US);
