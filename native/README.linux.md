@@ -156,6 +156,8 @@ except Crop Overscan, Rumble and Frame Pacing, which update immediately:
 | `hakux_video_region` | `auto` (the game's region), `ntsc-m`, `ntsc-j`, `pal` | `auto` |
 | `hakux_rumble` | `disabled`, `enabled` (controller vibration) | `disabled` |
 | `hakux_network` | `disabled` (no cable), `lan` (system link), `insignia` (Xbox Live through Insignia via NAT) | `disabled` |
+| `hakux_communicator` | `disabled`, `enabled` (an Xbox Live Communicator in player 1's controller; experimental) | `disabled` |
+| `hakux_mic_sensitivity` | `medium`, `low`, `high`, `off` (the Communicator's noise gate: -38, -30 or -46 dBFS, or none) | `medium` |
 | `hakux_audio_resampler` | `sinc` (higher quality, 32-tap filter; NEON on ARM64, AVX2+FMA or SSE2 on x86-64), `linear` (less CPU, softer high frequencies) | `sinc` |
 | `hakux_audio_processing` | `fast` (dry mix), `dsp` (Xbox effects and stereo downmix; experimental) | `dsp` with JIT, otherwise `fast` |
 | `hakux_frame_pace` | `disabled`, `2` (after each frame the decoder waits for the GPU to finish the frame two before it), `1` (one before it) | `disabled` |
@@ -171,6 +173,18 @@ broadcast-capable interface if needed. Add peers beyond broadcast range to
 commas, spaces or newlines; `#` starts a comment. If two devices share a
 console identity, RetroArch warns and generates a new serial number and
 MAC address on the next game start. Existing saves remain valid.
+
+The Xbox Live Communicator (`native/dev/xblc.c`, from rfandango/hakuX#28) is
+the controller headset for voice chat over Insignia or system link. It sits
+in expansion slot A of player 1's controller (slot B stays empty: there are
+no memory units). Its microphone is RetroArch's (**Settings → Audio →
+Microphone**), opened only while a game's voice chat moves audio
+(`native/libretro/mic.c`); without one the game hears silence. A noise gate
+mutes sounds that aren't a voice, such as buttons and sticks; **Communicator
+Microphone Sensitivity** sets its threshold. The headset's sound is mixed into the game's
+output, 3 dB down in each channel. Voice with another player is untested.
+`NC_TRACE_MIC=1` logs the gate's decisions, and `NC_MIC_DUMP=<file>` saves the
+microphone's first 60 seconds as raw 16-bit mono.
 
 Insignia mode uses upstream's NAT backend (`native/net/nat.c`, libslirp).
 The console gets 10.0.2.15 via DHCP and uses Insignia's DNS server,

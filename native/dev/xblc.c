@@ -8,14 +8,17 @@
  * requests as xemu's (hw/xbox/xblc.c, Ryan Wendland and Fred Hallock), which
  * the titles' voice drivers run on there.
  *
- * On Android sound goes through AAudio: the phone's microphone, or the
- * headset's when one is plugged in (Android routes it), under the voice
- * communication preset (echo cancelling, noise suppression); the headphone's
- * sound plays with the game's. The USB frame thread only moves samples
- * through two rings; the streams open on a thread of their own when the
- * title first moves audio (the microphone isn't held until a game uses it),
- * and again at each rate it sets. Elsewhere the device has no sound of the
- * host's: the microphone sends nothing.
+ * The USB frame thread only moves samples through two rings; the host's
+ * sound comes from a backend (XblcHost). On Android it is AAudio's: the
+ * phone's microphone, or the headset's when one is plugged in (Android
+ * routes it), under the voice communication preset (echo cancelling, noise
+ * suppression); the headphone's sound plays with the game's. The streams
+ * open on a thread of their own when the title first moves audio (the
+ * microphone isn't held until a game uses it), and again at each rate it
+ * sets. Elsewhere the front end moves the samples itself (the libretro
+ * core, native/libretro/mic.c and audio.c): it asks whether the title moves
+ * audio (nc_xblc_state), feeds the microphone (nc_xblc_mic_put) and takes
+ * the headphone's samples at its own rate (nc_xblc_phone_read).
  *
  * A noise gate sits on the microphone (NC_MIC_GATE, dBFS; "off" for none):
  * the titles show a player as talking for any sound at all, so the
@@ -90,7 +93,10 @@ typedef struct Xblc {
     int mic_rate, phone_rate;    /* the streams' */
     double mic_pos, phone_pos;   /* the resamplers' fractional position */
     int16_t mic_last, phone_last;
+    int16_t phone_prev;          /* nc_xblc_phone_read's: the sample before phone_last */
+    bool phone_primed;           /* it holds PHONE_FILL_MS: it plays */
     bool started;                /* the title has moved audio: the streams are open */
+    uint64_t packets;            /* the isochronous packets it moved (nc_xblc_state) */
 #ifdef __ANDROID__
     pthread_mutex_t streams;     /* opening and closing */
     AAudioStream *in, *out;
@@ -98,7 +104,7 @@ typedef struct Xblc {
     bool opening;
     bool logged_no_mic;
 #endif
-    /* the microphone's noise gate (on_mic's thread) */
+    /* the microphone's noise gate (under lock) */
     double gate_threshold;       /* RMS of a window that opens it (0: no gate) */
     double win_sq, peak_db;      /* the window's sum of squares; the loudest window this second (NC_TRACE_MIC) */
     double floor_db;             /* the background: the quietest window of the last FLOOR_BLOCKS */
@@ -116,7 +122,22 @@ typedef struct Xblc {
     long dumped;
 } Xblc;
 
-#ifdef __ANDROID__
+/* The host's sound, one backend a build, called outside x->lock: the title
+ * first moved audio or set another rate (start), the device goes (stop). The
+ * front end's has neither: it moves the samples itself. */
+typedef struct XblcHost {
+    void (*start)(Xblc *x);
+    void (*stop)(Xblc *x);
+} XblcHost;
+
+/* Each player's Communicator, for the front end. Lock order: g_lock, then
+ * the device's. */
+static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
+static Xblc *g_xblc[4];
+static char g_gate[16];          /* nc_xblc_set_gate's; "": NC_MIC_GATE's */
+
+#define PHONE_FILL_MS 40         /* the headphone's samples queued before the front end plays them, and kept */
+
 #define GATE_WINDOW_MS 10
 #define GATE_HOLD_MS   400
 #define GATE_ATTACK_MS 5
@@ -263,8 +284,6 @@ static void gate(Xblc *x, int16_t *s, int n, int rate)
     }
 }
 
-#endif
-
 static void ring_put(Ring *r, int16_t v)
 {
     if (r->count == r->max) {
@@ -286,7 +305,6 @@ static bool ring_get(Ring *r, int16_t *v)
     return true;
 }
 
-#ifdef __ANDROID__
 /* Linear resampling from rate `from` to `to`. *pos is where the next output
  * sample reads, counting the previous call's last input (*last) as -1 and
  * this call's as 0..n-1; each reads between the inputs either side of it. */
@@ -314,12 +332,33 @@ static void resample_put(Ring *r, const int16_t *in, int n, int from, int to, do
     *last = in[n - 1];
 }
 
+/* The microphone's samples at x->mic_rate, gated in place, into the ring at
+ * the title's rate. Under x->lock. */
+static void mic_in(Xblc *x, int16_t *s, int n)
+{
+    gate(x, s, n, x->mic_rate > 0 ? x->mic_rate : x->rate);
+    resample_put(&x->mic, s, n, x->mic_rate, x->rate, &x->mic_pos, &x->mic_last);
+}
+
+/* The title's rate: the rings sized for it, emptied (their samples are the
+ * last rate's). Under x->lock. */
+static void set_rate(Xblc *x, int rate)
+{
+    x->rate = rate;
+    x->mic.count = x->phone.count = 0;
+    x->mic.max = (unsigned)rate / 10;          /* 100 ms */
+    x->phone.max = (unsigned)rate / 5;         /* 200 ms */
+    x->phone_pos = 0;
+    x->phone_prev = x->phone_last = 0;
+    x->phone_primed = false;
+}
+
+#ifdef __ANDROID__
 static aaudio_data_callback_result_t on_mic(AAudioStream *s, void *user, void *data, int32_t frames)
 {
     Xblc *x = user;
     pthread_mutex_lock(&x->lock);
-    gate(x, data, frames, x->mic_rate > 0 ? x->mic_rate : x->rate);
-    resample_put(&x->mic, data, frames, x->mic_rate, x->rate, &x->mic_pos, &x->mic_last);
+    mic_in(x, data, frames);
     pthread_mutex_unlock(&x->lock);
     return AAUDIO_CALLBACK_RESULT_CONTINUE;
 }
@@ -430,10 +469,18 @@ static void reopen(Xblc *x)
     }
     x->opening = pthread_create(&x->opener, NULL, reopen_thread, x) == 0;
 }
-#else
-static void reopen(Xblc *x)
+
+static void aaudio_stop(Xblc *x)
 {
+    if (x->opening) {
+        pthread_join(x->opener, NULL);
+    }
+    close_streams(x);
 }
+
+static const XblcHost k_host = {reopen, aaudio_stop};
+#else
+static const XblcHost k_host = {NULL, NULL};
 #endif
 
 static int xblc_control(NcUsbDev *d, const uint8_t *s, uint8_t *data, int len)
@@ -450,10 +497,12 @@ static int xblc_control(NcUsbDev *d, const uint8_t *s, uint8_t *data, int len)
             }
             pthread_mutex_lock(&x->lock);
             const bool changed = x->rate != k_rates[i] && x->started;
-            x->rate = k_rates[i];
+            if (x->rate != k_rates[i]) {
+                set_rate(x, k_rates[i]);
+            }
             pthread_mutex_unlock(&x->lock);
-            if (changed) {
-                reopen(x);
+            if (changed && k_host.start) {
+                k_host.start(x);
             }
             return 0;
         }
@@ -473,6 +522,7 @@ static int xblc_data(NcUsbDev *d, bool in, int ep, uint8_t *buf, int len)
     const bool start = !x->started;
     x->started = true;
     int n = 0;
+    x->packets++;
     if (in && ep == XBLC_EP_IN) {
         /* what the microphone has, up to the packet (an empty one: nothing yet) */
         int16_t v;
@@ -487,8 +537,8 @@ static int xblc_data(NcUsbDev *d, bool in, int ep, uint8_t *buf, int len)
         }
     }
     pthread_mutex_unlock(&x->lock);
-    if (start) {
-        reopen(x);
+    if (start && k_host.start) {
+        k_host.start(x);
     }
     return n;
 }
@@ -511,7 +561,11 @@ NcUsbDev *nc_xblc_new(unsigned player)
 #endif
     x->rate = 16000;                /* the Communicator's until the title sets one */
     /* the noise gate's threshold in dBFS (-38 when unset; "off": none) */
-    const char *g = getenv("NC_MIC_GATE");
+    char gate_set[sizeof(g_gate)];
+    pthread_mutex_lock(&g_lock);
+    memcpy(gate_set, g_gate, sizeof(gate_set));
+    pthread_mutex_unlock(&g_lock);
+    const char *g = gate_set[0] ? gate_set : getenv("NC_MIC_GATE");
     if (!g || strcmp(g, "off")) {
         const double db = g ? atof(g) : -38;
         x->gate_threshold = db < 0 ? 32768.0 * pow(10, db / 20) : 0;
@@ -540,6 +594,11 @@ NcUsbDev *nc_xblc_new(unsigned player)
     x->dev.data = xblc_data;
     x->dev.reset = xblc_reset;
     x->dev.pending_addr = -1;
+    if (player < 4) {
+        pthread_mutex_lock(&g_lock);
+        g_xblc[player] = x;
+        pthread_mutex_unlock(&g_lock);
+    }
     return &x->dev;
 }
 
@@ -551,11 +610,17 @@ bool nc_xblc_free(NcUsbDev *d)
         return false;
     }
     Xblc *x = (Xblc *)d;
-#ifdef __ANDROID__
-    if (x->opening) {
-        pthread_join(x->opener, NULL);
+    pthread_mutex_lock(&g_lock);    /* the front end's calls end before it goes */
+    for (unsigned p = 0; p < 4; p++) {
+        if (g_xblc[p] == x) {
+            g_xblc[p] = NULL;
+        }
     }
-    close_streams(x);
+    pthread_mutex_unlock(&g_lock);
+    if (k_host.stop) {
+        k_host.stop(x);
+    }
+#ifdef __ANDROID__
     pthread_mutex_destroy(&x->streams);
 #endif
     if (x->dump) {
@@ -564,4 +629,100 @@ bool nc_xblc_free(NcUsbDev *d)
     pthread_mutex_destroy(&x->lock);
     free(x);
     return true;
+}
+
+void nc_xblc_set_gate(const char *gate)
+{
+    pthread_mutex_lock(&g_lock);
+    snprintf(g_gate, sizeof(g_gate), "%s", gate ? gate : "");
+    pthread_mutex_unlock(&g_lock);
+}
+
+/* Player p's Communicator, locked with g_lock held (it isn't freed
+ * meanwhile), or NULL. */
+static Xblc *lock_player(unsigned p)
+{
+    pthread_mutex_lock(&g_lock);
+    Xblc *x = p < 4 ? g_xblc[p] : NULL;
+    if (x) {
+        pthread_mutex_lock(&x->lock);
+    } else {
+        pthread_mutex_unlock(&g_lock);
+    }
+    return x;
+}
+
+static void unlock_player(Xblc *x)
+{
+    pthread_mutex_unlock(&x->lock);
+    pthread_mutex_unlock(&g_lock);
+}
+
+int nc_xblc_state(unsigned player, uint64_t *packets)
+{
+    Xblc *x = lock_player(player);
+    if (!x) {
+        *packets = 0;
+        return 0;
+    }
+    const int rate = x->rate;
+    *packets = x->packets;
+    unlock_player(x);
+    return rate;
+}
+
+void nc_xblc_mic_put(unsigned player, int16_t *s, int n, int rate)
+{
+    Xblc *x = lock_player(player);
+    if (!x) {
+        return;
+    }
+    if (rate != x->mic_rate) {
+        x->mic_rate = rate;
+        x->mic_pos = 0;
+        x->mic_last = 0;
+    }
+    mic_in(x, s, n);
+    unlock_player(x);
+}
+
+/* The title's samples come in the USB's 1 ms frames and the front end takes
+ * them at its own pace: they play once PHONE_FILL_MS are queued (again after
+ * the ring ran dry), and the step runs up to 0.5% fast or slow as the ring
+ * holds more or less than that, so the two keep together. Between the
+ * title's samples, linearly; at the title's rate, as they are. */
+int nc_xblc_phone_read(unsigned player, int16_t *out, int n, int rate)
+{
+    Xblc *x = lock_player(player);
+    if (!x) {
+        return 0;
+    }
+    const unsigned fill = (unsigned)x->rate * PHONE_FILL_MS / 1000;
+    x->phone_primed = x->phone_primed || x->phone.count >= fill;
+    if (!x->phone_primed) {
+        memset(out, 0, (size_t)n * sizeof(*out));
+    } else if (rate == x->rate) {
+        for (int i = 0; i < n; i++) {
+            int16_t v;
+            out[i] = ring_get(&x->phone, &v) ? v : 0;
+        }
+    } else {
+        const double off = ((double)x->phone.count - fill) / fill;
+        const double step = (double)x->rate / rate * (1 + 0.005 * (off > 1 ? 1 : off < -1 ? -1 : off));
+        for (int i = 0; i < n; i++) {
+            x->phone_pos += step;
+            while (x->phone_pos >= 1.0) {
+                int16_t v;
+                x->phone_prev = x->phone_last;
+                x->phone_last = ring_get(&x->phone, &v) ? v : 0;
+                x->phone_pos -= 1.0;
+            }
+            out[i] = (int16_t)(x->phone_prev + (x->phone_last - x->phone_prev) * x->phone_pos);
+        }
+    }
+    if (x->phone_primed && !x->phone.count) {
+        x->phone_primed = false;        /* ran dry: silence until it fills again */
+    }
+    unlock_player(x);
+    return n;
 }

@@ -11,12 +11,21 @@
  * pacing itself in real time. Draining everything each call would not do:
  * every drain to empty sets the frame thread producing ahead of real time
  * to the low watermark again.
+ *
+ * Player 1's Xbox Live Communicator (the hakux_communicator option) has its
+ * headphone here too, as the handheld has one sink: the title's samples at
+ * 48 kHz (nc_xblc_phone_read), 3 dB down in each channel, added to the
+ * frames as they go out. The APU's ring and its pacing don't see it; a frame
+ * the frontend leaves for the next call keeps its headphone samples (g_voice).
  */
 #include "native/dev/apu/apu_int.h"
+#include "native/dev/usb.h"
 #include "native/libretro/libretro_int.h"
 
 #define OUT_RATE 48000
 #define OUT_FRAME_BYTES 4   /* a stereo sample: two 16-bit channels */
+#define VOICE_GAIN 23198    /* -3 dB, Q15: mono into both channels at the same loudness */
+#define PCM_FRAMES 4096
 
 static struct {
     uint8_t *buf;
@@ -26,6 +35,11 @@ static struct {
     uint64_t acc;            /* the frames' remainder, in 1/NC_LR_FPS_NUM of one */
     uint32_t callbacks, short_callbacks;
 } g_out;
+
+static struct {
+    int16_t s[PCM_FRAMES];   /* the headphone's samples for the frames going out next */
+    uint32_t n;
+} g_voice;
 
 int apu_out_queued(void)
 {
@@ -73,6 +87,34 @@ void apu_out_close(void)
 {
     free(g_out.buf);
     memset(&g_out, 0, sizeof(g_out));   /* nc_lr_audio_run hands over nothing until the next open */
+    memset(&g_voice, 0, sizeof(g_voice));
+}
+
+static int16_t sat16(int v)
+{
+    return (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v);
+}
+
+/* The Communicator's headphone into n frames; none without one (the frames
+ * as they are). */
+static void voice_mix(int16_t *pcm, uint32_t n)
+{
+    if (g_voice.n < n) {
+        g_voice.n += (uint32_t)nc_xblc_phone_read(0, g_voice.s + g_voice.n, (int)(n - g_voice.n), OUT_RATE);
+    }
+    for (uint32_t i = 0; i < MIN(n, g_voice.n); i++) {
+        const int v = g_voice.s[i] * VOICE_GAIN >> 15;
+        pcm[2 * i] = sat16(pcm[2 * i] + v);
+        pcm[2 * i + 1] = sat16(pcm[2 * i + 1] + v);
+    }
+}
+
+/* The frames the frontend took: their headphone samples are spent. */
+static void voice_taken(uint32_t done)
+{
+    done = MIN(done, g_voice.n);
+    memmove(g_voice.s, g_voice.s + done, (g_voice.n - done) * sizeof(g_voice.s[0]));
+    g_voice.n -= done;
 }
 
 /* retro_run: one period's samples to RetroArch, what the ring has of them
@@ -82,7 +124,7 @@ void nc_lr_audio_run(retro_audio_sample_batch_t batch)
     if (!g_out.buf || !batch) {
         return;
     }
-    static int16_t pcm[4096 * 2];
+    static int16_t pcm[PCM_FRAMES * 2];
     uint32_t want = period_frames();
     const uint64_t tail = g_out.tail;
     const uint32_t have = (uint32_t)((apu_ld_acq(&g_out.head) - tail) / OUT_FRAME_BYTES);
@@ -92,6 +134,7 @@ void nc_lr_audio_run(retro_audio_sample_batch_t batch)
     const uint32_t first = MIN(bytes, g_out.cap - at);
     memcpy(pcm, g_out.buf + at, first);
     memcpy((uint8_t *)pcm + first, g_out.buf, bytes - first);
+    voice_mix(pcm, n);
     apu_inc(&g_out.callbacks);
     if (n < want) {
         apu_inc(&g_out.short_callbacks);
@@ -108,6 +151,7 @@ void nc_lr_audio_run(retro_audio_sample_batch_t batch)
         }
         done += (uint32_t)MIN(took, (size_t)(n - done));
     }
+    voice_taken(done);
     if (done) {
         apu_st_rel(&g_out.tail, tail + (uint64_t)done * OUT_FRAME_BYTES);
         pthread_cond_broadcast(g_out.wake);

@@ -220,6 +220,9 @@ def main():
                                        'option: hakux_language (Language), default auto',
                                        'option: hakux_video_region (Video Region), default auto',
                                        'option: hakux_rumble (Rumble), default disabled',
+                                       'option: hakux_communicator (Xbox Live Communicator), default disabled',
+                                       'option: hakux_mic_sensitivity (Communicator Microphone Sensitivity), '
+                                       'default medium',
                                        'option: hakux_audio_resampler (Audio Resampler), default sinc',
                                        f'option: hakux_audio_processing (Audio Processing), default {args.audio_default}',
                                        'option: hakux_frame_pace (Frame Pacing), default disabled'))
@@ -308,6 +311,17 @@ def main():
              "player 3's controller pulled out", 'frame 35: ports: 1 1 0 1', "player 2's controller plugged in",
              'reset at frame 45', 'ohci: 3 controller(s) (players 124)', 'ran 60 frames'),
             dict(vk, HARNESS_PORTS_AT='25:1,0,0,1;35:1,1,0,1', HARNESS_RESET_AT='45'))
+        # The Xbox Live Communicator: off by default; on, in player 1's
+        # controller from the boot, with the sensitivity's noise gate, and
+        # freed with the console at each stop.
+        run_without([args.harness, args.core, root / 'spin.iso', 30, root / 'saves'],
+                    ('communicator off', 'ran 30 frames'), ('has a Communicator',))
+        voice = dict(os.environ, HARNESS_OPTIONS='hakux_communicator=enabled;hakux_mic_sensitivity=high')
+        run([args.harness, args.core, root / 'spin.iso', 30, root / 'saves'], 0,
+            ('communicator on (noise gate -46)', "ohci: player 1's controller has a Communicator",
+             'communicator 1: noise gate -46', 'ran 30 frames'), voice)
+        cycles([args.harness, args.core, root / 'spin.iso', 30, root / 'saves'], voice, 5,
+               "player 1's controller has a Communicator")
         # RetroArch sets the ports as the game starts to boot: before the
         # controllers are made or just after, the console has the same ones.
         run([args.harness, args.core, root / 'spin.iso', 40, root / 'saves'], 0,

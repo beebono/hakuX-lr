@@ -155,9 +155,10 @@ static const unsigned k_port_map[4] = {3, 4, 1, 2};
 static struct {
     pthread_mutex_t lock;
     int mask;           /* nc_pad_plug's players (bit n: player n + 1); -1: not called yet */
+    int voice;          /* nc_dev_ohci_set_voice's; -1: not called yet */
     bool live;          /* from init to free, on the root ports: plugging takes effect at once */
     NcUsbDev *pad[4];   /* each controller: its hub, the gamepad on port 1 */
-} g_pads = {PTHREAD_MUTEX_INITIALIZER, -1};
+} g_pads = {PTHREAD_MUTEX_INITIALIZER, -1, -1};
 
 static uint64_t now_ns(void)
 {
@@ -834,11 +835,13 @@ void nc_dev_ohci_init(struct NcVm *vm)
      * in are made. */
     const char *fh = getenv("NC_USB_FRONT_HUB");
     const bool front_hub = fh && atoi(fh) != 0;
-    /* NC_VOICE_MASK (the app's voice=): the players with an Xbox Live
-     * Communicator in their controller's expansion slot A (hub port 2, as
-     * xemu's), for voice chat. */
+    /* nc_dev_ohci_set_voice's, else NC_VOICE_MASK (the app's voice=): the
+     * players with an Xbox Live Communicator in their controller's expansion
+     * slot A (hub port 2, as xemu's), for voice chat. */
     const char *vmask = getenv("NC_VOICE_MASK");
-    const unsigned voice = vmask ? (unsigned)strtoul(vmask, NULL, 16) & 0xF : 0;
+    const unsigned voice = g_pads.voice >= 0 ? (unsigned)g_pads.voice
+                           : vmask           ? (unsigned)strtoul(vmask, NULL, 16) & 0xF
+                                             : 0;
     if (front_hub && players) {
         NcUsbDev *front = nc_usb_hub_new(4);
         for (unsigned p = 0; p < 4; p++) {
@@ -948,6 +951,13 @@ void nc_dev_ohci_set_pads(unsigned mask)
 {
     pthread_mutex_lock(&g_pads.lock);
     set_pads(mask & 0xF);
+    pthread_mutex_unlock(&g_pads.lock);
+}
+
+void nc_dev_ohci_set_voice(unsigned mask)
+{
+    pthread_mutex_lock(&g_pads.lock);
+    g_pads.voice = (int)(mask & 0xF);
     pthread_mutex_unlock(&g_pads.lock);
 }
 

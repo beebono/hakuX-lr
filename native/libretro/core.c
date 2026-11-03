@@ -561,6 +561,7 @@ static void stop_core(const char *why)
         return;
     }
     nc_lr_input_rumble_stop();      /* a title shaking its controller stops with it */
+    nc_lr_mic_stop();               /* and its Communicator's microphone */
     const uint64_t t0 = now_ns();
     const bool wd = wd_start(why, t0);
     wd_stage("the guest CPU");
@@ -820,6 +821,7 @@ RETRO_API void retro_run(void)
 {
     const uint64_t now = now_ns();
     nc_lr_input_run(g_input_poll, g_input_state);
+    nc_lr_mic_run();
     nc_dev_nv2a_display_vsync(now);         /* RetroArch's frame tick is the display's vsync */
     gap_tick(now);
     nc_lr_audio_run(g_audio_batch);
