@@ -2,6 +2,53 @@
 
 ## Unreleased
 
+## linux-v0.18.1-exp.2 (Linux, aarch64 and x86-64, and Android, experimental)
+
+A first build for RetroArch on Android, untested on devices so far, and
+upstream hakuX's latest fixes. It's a pre-release; 0.18.0 stays the latest
+stable release.
+
+### What's new
+
+- **RetroArch on Android (experimental, untested)** —
+  `hakux-0.18.1-exp.2-android-arm64.zip` holds the core for RetroArch on
+  64-bit Android 9 or newer with a Vulkan 1.2 or newer GPU driver. It hasn't
+  run on an Android device yet. If you try it, please report whether a game
+  starts, with your device, GPU, Android version and the log (`adb logcat`,
+  tags starting with `hakuX`). To install, set **Settings → Drivers →
+  Video** to **vulkan** and restart RetroArch, then choose **Load Core →
+  Install or Restore a Core** and select `hakux_libretro_android.so`; the
+  [README](https://github.com/portare-ch/hakuX-lr/blob/linux-v0.18.1-exp.2/README.md#play-on-android)
+  has the details. The DSP JIT is Linux-only, so **Audio Processing**
+  defaults to **Fast** on Android.
+
+### Fixes
+
+- **Small render targets read by texel** — At a render scale above 1x, a
+  small render-to-texture target (kept at 1x) that a game reads by texel
+  was read from part of its area, stretched. Reported for Sega GT 2002's
+  car skins. From upstream hakuX.
+- **Arm Mali drivers** — From upstream hakuX: on Arm's Mali-G57 driver,
+  W-buffered draws use the rasterizer's depth, avoiding a GPU hang
+  (Morrowind). On Arm's drivers before r40, timeline waits poll the GPU's
+  counter instead of the driver's wait, which lost the device. On Arm's
+  Mali-G52 driver, presents skip the CPU wait and GPU timestamps are off.
+  A failed timeline wait now logs what it waited for.
+- Everything in 0.18.1-exp.1: Vulkan 1.3 GPUs without descriptor indexing,
+  and the device-creation log.
+
+### Testing
+
+The Linux builds pass CI's checks on both architectures, and on an AMD64
+machine (RADV) Burnout 3 ran normally at 2x. The Mali fixes haven't been
+tried on Mali hardware here. The Android core builds and packages cleanly
+with the NDK. The stop it uses (the core unloads without ending RetroArch's
+process) ran four load/unload cycles of Burnout 3 on AMD64, but the core
+hasn't run on Android.
+
+Implementations: [upstream fixes](https://github.com/portare-ch/hakuX-lr/pull/80),
+[Android core](https://github.com/portare-ch/hakuX-lr/pull/81).
+
 ## linux-v0.18.1-exp.1 (Linux, aarch64 and x86-64, experimental)
 
 A fix for Vulkan 1.3 GPUs without descriptor indexing, for testing on
