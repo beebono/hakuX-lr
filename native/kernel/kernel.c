@@ -40,36 +40,16 @@ static const NcKExport *k_by_ordinal[NC_KORDINAL_MAX];
 #define K_FAST     0x12000u /* exports run as guest code (install_fast_paths) */
 #define K_FAST_END 0x13000u
 
-/* Kernel pool: starts with one 64 KiB chunk of physical RAM, reached through
- * the contiguous window, and grows a chunk at a time as needed (pool.c), as
- * the Xbox kernel's takes pages as it needs them: what it holds unused is
- * the title's memory on the console. A fixed 4 MiB left titles that size
- * their caches by free memory (Forza) 3 MiB short; 512 KiB, ~35 KiB of it
- * used, left Amped 2 188 KiB short of the 1.4 MiB block its first level's
- * load asks for (its heap took the rest at boot): the call failed and it
- * wrote through the null pointer. Titles lay out physical memory at fixed
- * addresses from just above the kernel to the top MiB: Halo 0x61000-0x19A6000
- * at start, Burnout 2 0x2377000-0x3F00000 in 73 blocks. The first chunk
- * sits at the bottom of the top MiB (POOL_BASE_BELOW_TOP under the top of
- * RAM), above both. A chunk 512 KiB under the top reserve stood in Burnout
- * 2's 6.25 MiB block: the call failed and its traffic data, pointers baked
- * for those addresses, faulted at the first race's load. One just above
- * the kernel (0x50000) took the pages under Halo's block: Halo asks for two
- * 4 KiB pages below 16 MiB as its first level loads, only 0x60000 was
- * left, the second call failed and the title read through the null
- * pointer on the level's loading screen. The pool's
- * later chunks still come from the top (nc_vm_alloc_phys_high): one taken
- * before a title lays out its memory there would stand in it the same way. */
+/* Grow the pool in 64 KiB chunks to avoid reserving unused title memory.
+ * Place the first chunk at the bottom of the top MiB to leave Halo's low
+ * pages and Burnout 2's fixed layout free. Later chunks use
+ * nc_vm_alloc_phys_high and may conflict with future fixed allocations. */
 #define POOL_SIZE  0x00010000u
 #define POOL_BASE_BELOW_TOP NC_TOP_RESERVE
 _Static_assert(POOL_BASE_BELOW_TOP >= POOL_SIZE, "the pool's first range inside RAM");
 
-/* A savestate is loading: the pool's first range where the boot that made
- * it put it (the 64 KiB under its process object, whose address
- * nc_kern_state_load checks): states saved before KERN v3, and the ones
- * saved since by a run that loaded one, have it 512 KiB under the top
- * reserve; KERN v3 states from boots that put it above the kernel have it
- * at 0x50000. 0: POOL_BASE_BELOW_TOP under the top of RAM. */
+/* Saved pool base; zero selects the default. Preserve the original base so
+ * boot objects retain their savestate addresses. */
 static uint32_t g_pool_at;
 
 void nc_kernel_pool_for(uint32_t kprocess)
@@ -489,9 +469,6 @@ bool nc_kernel_init(NcKernel *k, NcVm *vm)
         nc_wr32(km + K_IDT + 8 * v + 4, (k->trap_va & 0xFFFF0000u) | 0x8E00u);
     }
 
-    /* The pool's first range at the bottom of the top MiB, or for a state,
-     * where its boot made it, so that the objects made at boot are where the
-     * state's are. */
     const uint32_t pool_lo = g_pool_at ? g_pool_at : vm->ram_size - POOL_BASE_BELOW_TOP;
     uint32_t pool_pa = nc_vm_alloc_phys_ex(vm, POOL_SIZE, pool_lo, pool_lo + POOL_SIZE, NC_PAGE, false);
     if (pool_pa == UINT32_MAX) {

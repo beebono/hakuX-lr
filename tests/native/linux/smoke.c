@@ -154,9 +154,7 @@ int main(int argc, char **argv)
     nc_vm_prot_hook = prot_hook;
     check(nc_vm_init(&core.vm, 64u << 20), "memfd VM initialization");
     check(nc_kernel_init(&core.kernel, &core.vm), "replacement kernel initialization");
-    /* Titles lay out physical memory at fixed addresses from just above the
-     * kernel to the top MiB (Halo 0x61000-0x19A6000 with 4 KiB pages of its
-     * own under it, Burnout 2 0x2377000-0x3F00000): the boot leaves it free. */
+    /* Keep the title memory between the kernel and top reserve free at boot. */
     bool layouts_free = true;
     for (uint32_t pa = NC_KERNEL_PA + NC_KERNEL_SIZE; pa < core.vm.ram_size - NC_TOP_RESERVE; pa += NC_PAGE) {
         layouts_free = layouts_free && !core.vm.page_used[pa / NC_PAGE];
