@@ -2,8 +2,18 @@
 
 ## Unreleased
 
+## linux-v0.18.0 (Linux, aarch64 and x86-64)
+
+Adds RetroArch cheats, optional frame pacing, and Full DSP and sinc audio
+on AMD64, alongside game compatibility and renderer fixes.
+
 ### What's new
 
+- **RetroArch cheats** — Enable codes through **Quick Menu → Cheats** or
+  a `.cht` file. Supports hakuX's cheat syntax and `AAAAAAAA VVVVVVVV`
+  32-bit writes, with multiple codes joined by `+`, spaces or newlines.
+  Changes apply during play and survive a reset; invalid codes stay off
+  with a log message. See the [code formats](https://github.com/portare-ch/hakuX-lr/blob/linux-v0.18.0/native/README.linux.md#the-libretro-core).
 - **Full DSP on AMD64** — The DSP56300 JIT now runs on x86-64 Linux as
   well, so AMD64 defaults to **Full DSP (experimental)** like ARM64 and plays
   the game's Xbox reverb and other effects. Choose **Fast** if audio
@@ -12,7 +22,7 @@
   resampler, now the default on AMD64 as well, and the 3D audio (HRTF)
   filter use AVX2 and FMA on CPUs that have them (Intel Haswell, AMD Zen and
   newer), producing the same samples as ARM64's NEON, and SSE2 on older
-  CPUs. The voice mix and the output conversion use the same instructions.
+  CPUs. The voice mix and output conversion also gain vectorized paths.
 - **Frame Pacing (experimental)** — A core option from rfandango/hakuX#14,
   off by default. When a game's rendering falls behind its simulation,
   **On** holds the game to the render pace so unrendered frames don't queue
@@ -20,16 +30,61 @@
   during play. Each second a game draws, the renderer logs a `frame pace`
   line for measuring it, pacing on or off.
 
+### Fixes
+
+- **DSP effects on both architectures** — Update the DSP56300 JIT to
+  v1.0.0, fixing stale addresses in repeated DSP instructions that could
+  produce incorrect reverb and filter output.
+- **ADPCM and streaming audio** — Accept ADPCM blocks with a non-zero
+  reserved byte, as used by Jet Set Radio Future, and clamp out-of-range
+  step indexes. Wait for unfinished stream entries instead of reading
+  audio from address zero.
+- **Deep disc directories** — Find and list files beyond the previous
+  64-level limit, including Conker's deep audio directory. Cyclic directory
+  trees terminate without overflowing the host stack.
+- **DVD security checks** — Provide the security-sector response checked
+  by titles such as Rayman 3 (EUR), which previously returned to the
+  dashboard.
+- **Guest faults and game code patches** — Dispatch access violations to
+  the game's exception handlers and preserve forward REP-copy progress
+  on ARM64. Refresh translated code when a game rewrites its executable
+  pages. These address Serious Sam (EUR) streaming stalls and Rainbow Six
+  3: Black Arrow mission-loading crashes. Exception and interrupt dispatch
+  also make tracked stack pages writable before writing to them.
+- **Crimson Skies with DLC** — Trim an image copy that overwrote the USB
+  driver's memory after selecting a profile with DLC installed.
+- **Renderer lookups and texture cleanup** — Keep texture and surface
+  lookups fast as IDs grow during long sessions. Grow the retired-texture
+  table when needed to prevent an out-of-bounds write during large bursts
+  of texture destruction.
+
 ### Testing
 
 - x86-64 CI builds the DSP JIT with the image's Rust toolchain and runs its
   checks; the audio unit tests run at each vector level the runner's CPU
   has and compare the AVX2 paths with scalar models of NEON's arithmetic.
+- Regression coverage includes cheat parsing, concurrent updates and
+  resets; frame-pacing settings; deep and cyclic disc directories; DVD
+  signatures; ADPCM headers; and exception dispatch on tracked stacks.
 
 In Burnout 3 on a Ryzen 7 9800X3D (headless, 20 seconds from 20 s in), the
 audio thread used about 14% of one CPU core with Full DSP (29% with the C
 interpreter, 1% with Fast). Full DSP and sinc resampling on AMD64 still
 need in-game listening tests.
+
+The newly ported game fixes have not been verified in those games on
+Linux. Real-game cheats and frame pacing on
+the Retroid Pocket Nova also still need device testing. The AMD64 backend
+and Full DSP remain experimental; frame pacing is off by default.
+
+Implementations: [renderer](https://github.com/portare-ch/hakuX-lr/pull/70),
+[audio guards](https://github.com/portare-ch/hakuX-lr/pull/71),
+[disc access](https://github.com/portare-ch/hakuX-lr/pull/72),
+[kernel and CPU](https://github.com/portare-ch/hakuX-lr/pull/73),
+[cheats](https://github.com/portare-ch/hakuX-lr/pull/74),
+[frame pacing](https://github.com/portare-ch/hakuX-lr/pull/75),
+[AMD64 audio](https://github.com/portare-ch/hakuX-lr/pull/77),
+[DSP update](https://github.com/portare-ch/hakuX-lr/pull/78).
 
 ## linux-v0.17.4 (Linux, aarch64 and x86-64)
 

@@ -55,7 +55,7 @@ Releases include an experimental x86-64 archive; see the
 [installation guide](../README.md#play-on-amd64-x86-64-linux-systems).
 
 The Linux builds (ARM64 and x86-64) enable `HAKUX_DSP_JIT` by default. It builds
-dsp56300 0.1.3 from pinned sources using Cargo's locked dependencies;
+dsp56300 1.0.0 from pinned sources using Cargo's locked dependencies;
 release archives include their license notices and Rust toolchain version.
 `-DHAKUX_DSP_JIT=OFF` builds the C interpreter without requiring Rust.
 
