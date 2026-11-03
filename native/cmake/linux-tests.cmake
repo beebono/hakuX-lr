@@ -44,6 +44,12 @@ target_link_libraries(apu-resample-smoke PRIVATE hakux_native m)
 target_link_options(apu-resample-smoke PRIVATE -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc)
 add_test(NAME apu-resample-smoke COMMAND apu-resample-smoke)
 set_tests_properties(apu-resample-smoke PROPERTIES TIMEOUT 60)
+# The disc's directory search: a tree deeper than 64 levels, and one that loops.
+add_executable(xdvdfs-test "${NC_REPO}/tests/native/linux/xdvdfs.c")
+target_include_directories(xdvdfs-test PRIVATE "${NC_REPO}")
+target_link_libraries(xdvdfs-test PRIVATE hakux_native)
+add_test(NAME xdvdfs-test COMMAND xdvdfs-test)
+set_tests_properties(xdvdfs-test PROPERTIES TIMEOUT 10)
 # Exercise NAT with console frames and a fake UPnP router.
 add_executable(nat-smoke "${NC_REPO}/tests/native/linux/nat.c")
 target_link_libraries(nat-smoke PRIVATE hakux_native Threads::Threads)
