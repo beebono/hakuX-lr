@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## linux-v0.17.4 (Linux, aarch64 and x86-64)
+
+### Fixes
+
+- **Halo level loading** — Fix a regression since `linux-v0.14.0` that
+  crashed Halo while loading its first level. Move the initial kernel pool
+  to the top MiB of RAM, leaving the game's low memory pages available and
+  preserving space for Burnout 2's fixed memory layout.
+- **Allocation diagnostics** — Include the caller, address bounds and
+  alignment when a contiguous memory allocation fails.
+
+### Testing
+
+- Add a regression check that kernel boot leaves title memory free between
+  the kernel and the top MiB of RAM.
+- Halo's first level, opening cutscene and gameplay were verified on a
+  Retroid Pocket Nova (ARM64, Turnip).
+
+Halo gameplay on AMD64 and Burnout 2 were not tested.
+
 ## linux-v0.17.3 (Linux, aarch64 and x86-64)
 
 ### What's new
