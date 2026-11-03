@@ -151,6 +151,77 @@ static void chain(VkBaseOutStructure **tail, void *s)
     *tail = s;
 }
 
+/* The feature structs vk_init chains: after sType and pNext, VkBool32s only */
+#define FEAT(st, t, last) { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_##st, #t, \
+    (offsetof(t, last) - sizeof(VkBaseInStructure)) / sizeof(VkBool32) + 1 }
+static const struct { VkStructureType s; const char *name; unsigned n; } k_feat[] = {
+    FEAT(FEATURES_2, VkPhysicalDeviceFeatures2, features.inheritedQueries),
+    FEAT(VULKAN_1_2_FEATURES, VkPhysicalDeviceVulkan12Features, subgroupBroadcastDynamicId),
+    FEAT(VULKAN_1_3_FEATURES, VkPhysicalDeviceVulkan13Features, maintenance4),
+    FEAT(TIMELINE_SEMAPHORE_FEATURES, VkPhysicalDeviceTimelineSemaphoreFeatures, timelineSemaphore),
+    FEAT(DESCRIPTOR_INDEXING_FEATURES, VkPhysicalDeviceDescriptorIndexingFeatures, runtimeDescriptorArray),
+    FEAT(BUFFER_DEVICE_ADDRESS_FEATURES, VkPhysicalDeviceBufferDeviceAddressFeatures,
+         bufferDeviceAddressMultiDevice),
+    FEAT(HOST_QUERY_RESET_FEATURES, VkPhysicalDeviceHostQueryResetFeatures, hostQueryReset),
+    FEAT(SYNCHRONIZATION_2_FEATURES, VkPhysicalDeviceSynchronization2Features, synchronization2),
+    FEAT(DYNAMIC_RENDERING_FEATURES, VkPhysicalDeviceDynamicRenderingFeatures, dynamicRendering),
+    FEAT(EXTENDED_DYNAMIC_STATE_FEATURES_EXT, VkPhysicalDeviceExtendedDynamicStateFeaturesEXT,
+         extendedDynamicState),
+    FEAT(PIPELINE_CREATION_CACHE_CONTROL_FEATURES, VkPhysicalDevicePipelineCreationCacheControlFeatures,
+         pipelineCreationCacheControl),
+    FEAT(VERTEX_INPUT_DYNAMIC_STATE_FEATURES_EXT, VkPhysicalDeviceVertexInputDynamicStateFeaturesEXT,
+         vertexInputDynamicState),
+    FEAT(EXTENDED_DYNAMIC_STATE_2_FEATURES_EXT, VkPhysicalDeviceExtendedDynamicState2FeaturesEXT,
+         extendedDynamicState2PatchControlPoints),
+    FEAT(CUSTOM_BORDER_COLOR_FEATURES_EXT, VkPhysicalDeviceCustomBorderColorFeaturesEXT,
+         customBorderColorWithoutFormat),
+    FEAT(BORDER_COLOR_SWIZZLE_FEATURES_EXT, VkPhysicalDeviceBorderColorSwizzleFeaturesEXT,
+         borderColorSwizzleFromImage),
+    FEAT(PROVOKING_VERTEX_FEATURES_EXT, VkPhysicalDeviceProvokingVertexFeaturesEXT,
+         transformFeedbackPreservesProvokingVertex),
+    FEAT(DEPTH_CLIP_ENABLE_FEATURES_EXT, VkPhysicalDeviceDepthClipEnableFeaturesEXT, depthClipEnable),
+    FEAT(4444_FORMATS_FEATURES_EXT, VkPhysicalDevice4444FormatsFeaturesEXT, formatA4B4G4R4),
+    FEAT(INDEX_TYPE_UINT8_FEATURES_EXT, VkPhysicalDeviceIndexTypeUint8FeaturesEXT, indexTypeUint8),
+    FEAT(EXTENDED_DYNAMIC_STATE_3_FEATURES_EXT, VkPhysicalDeviceExtendedDynamicState3FeaturesEXT,
+         extendedDynamicState3ShadingRateImageEnable),
+    FEAT(GRAPHICS_PIPELINE_LIBRARY_FEATURES_EXT, VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT,
+         graphicsPipelineLibrary),
+    FEAT(DYNAMIC_RENDERING_LOCAL_READ_FEATURES_KHR, VkPhysicalDeviceDynamicRenderingLocalReadFeaturesKHR,
+         dynamicRenderingLocalRead),
+    FEAT(RASTERIZATION_ORDER_ATTACHMENT_ACCESS_FEATURES_EXT,
+         VkPhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT,
+         rasterizationOrderStencilAttachmentAccess),
+};
+#undef FEAT
+
+/* Logs each feature in want (the device's create chain) that have (the
+ * queried chain) doesn't report, which fails vkCreateDevice with
+ * VK_ERROR_FEATURE_NOT_PRESENT. "[n]": the nth VkBool32 after pNext. */
+static void log_unsupported(const void *want, const void *have)
+{
+    for (const VkBaseInStructure *w = want; w; w = w->pNext) {
+        size_t i = 0;
+        while (i < ARRAY_SIZE(k_feat) && k_feat[i].s != w->sType) {
+            i++;
+        }
+        const VkBaseInStructure *h = have;
+        while (h && h->sType != w->sType) {
+            h = h->pNext;
+        }
+        if (i == ARRAY_SIZE(k_feat) || !h) {
+            hle_log("hakuX-hle-back", "vk: features: sType %d not checked", (int)w->sType);
+            continue;
+        }
+        const VkBool32 *a = (const VkBool32 *)(w + 1), *b = (const VkBool32 *)(h + 1);
+        for (unsigned f = 0; f < k_feat[i].n; f++) {
+            if (a[f] && !b[f]) {
+                hle_log("hakuX-hle-back", "vk: features: %s[%u] asked for, not supported",
+                        k_feat[i].name, f);
+            }
+        }
+    }
+}
+
 /* debug.hakux.caps (else HAKUX_HLE_CAPS), read at device creation: "-name"
  * turns a capability off, so its substitute runs (what other vendors'
  * drivers lack), e.g. "-bc,-vids,-push"; "-vk13" makes a 1.3 device a 1.1 one
@@ -700,9 +771,10 @@ static int vk_init(PFN_vkGetInstanceProcAddr gipa_shared, VkInstance inst_shared
     VkPhysicalDeviceVulkan12Features f12 = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, .pNext = &f13,
         .timelineSemaphore = VK_TRUE, .bufferDeviceAddress = c->bda,
-        .runtimeDescriptorArray = VK_TRUE, .descriptorBindingPartiallyBound = VK_TRUE,
-        .descriptorBindingSampledImageUpdateAfterBind = VK_TRUE,
-        .shaderSampledImageArrayNonUniformIndexing = VK_TRUE,
+        /* the bindless set's, optional in 1.3 */
+        .runtimeDescriptorArray = c->bindless, .descriptorBindingPartiallyBound = c->bindless,
+        .descriptorBindingSampledImageUpdateAfterBind = c->bindless,
+        .shaderSampledImageArrayNonUniformIndexing = c->bindless,
         .hostQueryReset = c->host_query_reset,
         /* RetroArch's device wrapper (make) adds VK_KHR_sampler_mirror_clamp_to_edge
          * for its own samplers; with this struct in the chain the feature must
@@ -824,6 +896,22 @@ static int vk_init(PFN_vkGetInstanceProcAddr gipa_shared, VkInstance inst_shared
         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .pNext = &f,
         .queueCreateInfoCount = 1, .pQueueCreateInfos = &qci,
         .enabledExtensionCount = nx, .ppEnabledExtensionNames = exts };
+    hle_log("hakuX-hle-back", "vk: device \"%s\" api %u.%u.%u driver 0x%x floor=ok "
+            "plus: gpl=%d eds3=%d dbuf=%d m5=%d sscaled=%d local_read=%d fbfetch=%d "
+            "raster_order=%d cache_control=%d swapchain=%d",
+            v->props.deviceName, VK_API_VERSION_MAJOR(v->props.apiVersion),
+            VK_API_VERSION_MINOR(v->props.apiVersion),
+            VK_API_VERSION_PATCH(v->props.apiVersion), v->props.driverVersion,
+            c->gpl, c->eds3, c->descriptor_buffer, c->maint5, c->sscaled,
+            c->local_read, c->fbfetch, c->raster_order, c->cache_control, c->swapchain);
+    hle_log("hakuX-hle-back", "vk: bc=%d vids=%d push=%d push_desc=%d cbc=%d cbc_any=%d bcs=%d "
+            "bcs_image=%d x4444=%d r16=%d r5551=%d r4444=%d d24s8=%d bda=%d ahb=%d vk13=%d "
+            "dyn_render=%d sync2=%d eds1=%d eds2=%d bindless=%d depth_clamp=%d (0: the substitute "
+            "runs)", c->bc, c->vids, c->push, c->push_desc, c->cbc, c->cbc_any, c->bcs, c->bcs_image,
+            c->x4444, c->r16, c->r5551, c->r4444, c->d24s8, c->bda, c->ahb, c->vk13, c->dyn_render, c->sync2, c->eds1, c->eds2,
+            c->bindless, c->depth_clamp);
+    hle_quirks_init(v->phys);           /* what this driver needs worked around */
+    log_unsupported(&f, &q);
     VkResult r;
     if (make) {
         v->dev = make(v->phys, opaque, &dci);
@@ -849,21 +937,6 @@ static int vk_init(PFN_vkGetInstanceProcAddr gipa_shared, VkInstance inst_shared
     v->get_ahb_props = c->ahb ? (PFN_vkGetAndroidHardwareBufferPropertiesANDROID)
         vkGetDeviceProcAddr(v->dev, "vkGetAndroidHardwareBufferPropertiesANDROID") : NULL;
 #endif
-    hle_log("hakuX-hle-back", "vk: device \"%s\" api %u.%u.%u driver 0x%x floor=ok "
-            "plus: gpl=%d eds3=%d dbuf=%d m5=%d sscaled=%d local_read=%d fbfetch=%d "
-            "raster_order=%d cache_control=%d swapchain=%d",
-            v->props.deviceName, VK_API_VERSION_MAJOR(v->props.apiVersion),
-            VK_API_VERSION_MINOR(v->props.apiVersion),
-            VK_API_VERSION_PATCH(v->props.apiVersion), v->props.driverVersion,
-            c->gpl, c->eds3, c->descriptor_buffer, c->maint5, c->sscaled,
-            c->local_read, c->fbfetch, c->raster_order, c->cache_control, c->swapchain);
-    hle_log("hakuX-hle-back", "vk: bc=%d vids=%d push=%d push_desc=%d cbc=%d cbc_any=%d bcs=%d "
-            "bcs_image=%d x4444=%d r16=%d r5551=%d r4444=%d d24s8=%d bda=%d ahb=%d vk13=%d "
-            "dyn_render=%d sync2=%d eds1=%d eds2=%d bindless=%d depth_clamp=%d (0: the substitute "
-            "runs)", c->bc, c->vids, c->push, c->push_desc, c->cbc, c->cbc_any, c->bcs, c->bcs_image,
-            c->x4444, c->r16, c->r5551, c->r4444, c->d24s8, c->bda, c->ahb, c->vk13, c->dyn_render, c->sync2, c->eds1, c->eds2,
-            c->bindless, c->depth_clamp);
-    hle_quirks_init(v->phys);           /* what this driver needs worked around */
     return 0;
 }
 

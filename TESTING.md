@@ -208,6 +208,21 @@ The core then logs `vk: device "..." api 1.2.0` and `compat: Vulkan below
 synchronization validation on, to check the path. The layer only changes
 what the GPU reports: it doesn't reproduce another driver's bugs or speed.
 
+Vulkan 1.3 doesn't require descriptor indexing. Without it, the renderer uses
+its fixed-size descriptor sets instead of the bindless set.
+`VP_HAKUX_vk13_nodi` reports 1.3 with the bindless set's four features off.
+Set the variables above, but leave out the extension exclusions and use:
+
+```sh
+export VK_KHRONOS_PROFILES_PROFILE_NAME=VP_HAKUX_vk13_nodi
+export VK_KHRONOS_PROFILES_SIMULATE_CAPABILITIES=SIMULATE_API_VERSION_BIT,SIMULATE_FEATURES_BIT
+```
+
+The core logs `bindless=0`. Before device creation it also logs each feature
+it asks for that the device doesn't report, as `vk: features: <struct>[n]
+asked for, not supported`, where n counts the struct's VkBool32 members after
+pNext from 0.
+
 ### Is it FEX? The same game under KVM
 
 Use an x86-64 Linux machine to compare the same game under KVM and under
