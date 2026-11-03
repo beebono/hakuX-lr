@@ -129,12 +129,13 @@ if(HAKUX_DSP_JIT)
   target_link_libraries(hakux_apu PUBLIC nc_dsp_jit)
 endif()
 target_compile_definitions(hakux_apu PUBLIC NC_HAVE_DSP_JIT=$<BOOL:${HAKUX_DSP_JIT}>)
-if(ANDROID)
+if(ANDROID AND NOT HAKUX_BUILD_LIBRETRO)
   target_sources(hakux_apu PRIVATE ${NC_APU}/out.c)
   target_link_libraries(hakux_apu PUBLIC aaudio)
 else()
-  # Linux: each executable brings its output (apu_out_*), the diagnostics
-  # the paced silent sink; the libretro core has its own (libretro/audio.c).
+  # Linux, and Android's libretro build: each executable brings its output
+  # (apu_out_*), the diagnostics the paced silent sink; the libretro core has
+  # its own (libretro/audio.c).
   set(NC_APU_OUT_NULL "${NC_APU}/out_null.c")
 endif()
 target_include_directories(hakux_apu PRIVATE "${NC_REPO}")
