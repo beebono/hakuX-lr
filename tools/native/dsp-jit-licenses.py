@@ -19,8 +19,11 @@ def main():
     parser.add_argument('--cargo', default='cargo')
     args = parser.parse_args()
     source = args.source.resolve()
+    # the host's crates: the library is built for it (aarch64 or x86_64 Linux)
+    host = next(line.split(None, 1)[1] for line in output('rustc', '-vV').splitlines()
+                if line.startswith('host: '))
     metadata = json.loads(output(args.cargo, 'metadata', '--locked', '--format-version', '1',
-                                 '--filter-platform', 'aarch64-unknown-linux-gnu',
+                                 '--filter-platform', host,
                                  '--manifest-path', str(source / 'Cargo.toml')))
     toolchain = Path(output('rustc', '--print', 'sysroot'))
     rust_notices = toolchain / 'share' / 'doc' / 'rust'

@@ -95,6 +95,9 @@ static inline void apu_spin_lock(ApuSpin *s)
         } while (v);
 #else
         while (__atomic_load_n(&s->v, __ATOMIC_RELAXED)) {
+#if defined(__x86_64__)
+            __builtin_ia32_pause();
+#endif
         }
 #endif
     }

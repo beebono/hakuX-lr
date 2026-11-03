@@ -489,6 +489,8 @@ static bool voice_spin_lock(MCPXAPUState *d, uint16_t v, bool may_retry)
         for (unsigned i = 1;; i++) {
 #if defined(__aarch64__)
             __asm__ __volatile__("yield" ::: "memory");
+#elif defined(__x86_64__)
+            __builtin_ia32_pause();
 #endif
             if (!__atomic_load_n(&d->vp.voice_spinlocks[v].v, __ATOMIC_RELAXED) &&
                 apu_spin_trylock(&d->vp.voice_spinlocks[v])) {
@@ -2021,7 +2023,7 @@ static void voice_process(MCPXAPUState *d, uint8_t *c,
 
     /* Deinterleave samples[32][2] into per-channel contiguous buffers once
      * (amortized across 8 subsequent mix_one_bin calls). mix_one_bin
-     * (NEON-accelerated on aarch64) reads contiguous float[32]. */
+     * (NEON on aarch64, SSE2/AVX2 on x86-64) reads contiguous float[32]. */
     float channel_buf[2][NUM_SAMPLES_PER_FRAME];
     for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
         channel_buf[0][i] = samples[i][0];
@@ -2306,6 +2308,8 @@ static VoiceTake voice_take(MCPXAPUState *d, uint8_t *c, uint16_t v)
                 } else if (us < HELD_SPIN_US) {
 #if defined(__aarch64__)
                     __asm__ __volatile__("yield" ::: "memory");
+#elif defined(__x86_64__)
+                    __builtin_ia32_pause();
 #endif
                 } else {
                     usleep(HELD_NAP_US);
@@ -2699,6 +2703,10 @@ void mcpx_apu_vp_init(MCPXAPUState *d)
     d->vp.voice_cache = NULL;
     d->vp.ssl_cache = NULL;
 
+#if defined(__x86_64__)
+    /* the vector paths (simd.h): the CPU's again, NC_APU_SIMD's cap */
+    nc_log("hakuX-apu", "vector paths: %s", vp_simd_name(vp_simd_init()));
+#endif
     /* The voices' resampler quality: the content's (g_apu_config.resampler),
      * for the session; each voice's is made at its first VOICE_ON
      * (voice_reset_filters) */

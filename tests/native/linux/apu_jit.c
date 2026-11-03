@@ -1,6 +1,9 @@
 /* Copyright (C) 2026-present PortareOS */
-/* The native bridge over the real AArch64 DSP56300 JIT. No guest title or
- * sound device: standalone DSP programs and the APU's parked frame thread. */
+/* The native bridge over the real DSP56300 JIT (AArch64, x86-64). No guest
+ * title or sound device: standalone DSP programs and the APU's parked frame
+ * thread. `apu-jit-smoke bench`: the JIT against the C interpreter on two
+ * GP frame programs, their speed and whether the two leave the same memory
+ * (not a test; host figures). */
 #include "apu_fixture.h"
 #include "native/dev/apu/dsp/dsp_dma_regs.h"
 #include "native/state/sections.h"
@@ -350,9 +353,177 @@ static void test_apu_and_states(void)
     apu_down();
 }
 
-int main(void)
+/* ---- `bench`: two built-in GP frames, P:0 a jump to P:$100: four passes
+ * over the mix buffer, each sample through a 64-tap FIR (coefficients at
+ * Y:0) and a comb, written back, then the frame's end (movep to X:$ffffc4);
+ * the delay lines in modulo addressing (a 256-word FIR line at X:$800, a
+ * 128-word comb at X:$400; about 74000 cycles), or linear (the FIR over the
+ * next 64 words, 192 samples a pass; about 55000). */
+static const uint32_t k_bench_modulo[] = {
+    /* move #$1400,r0  move #$800,r1  movec #255,m1  move #0,r4  movec #63,m4
+     * move #$400,r2  movec #127,m2  move #0.5,y1  do #4,passes  do #256,samples */
+    0x60F400, 0x001400, 0x61F400, 0x000800, 0x05FFA1, 0x340000, 0x053FA4, 0x62F400, 0x000400,
+    0x057FA2, 0x274000, 0x060480, 0x00011A, 0x060081, 0x000118,
+    /* move x:(r0),x0  move x0,x:(r1)+  clr a x:(r1)+,x0 y:(r4)+,y0  rep #63
+     * mac x0,y0,a x:(r1)+,x0 y:(r4)+,y0  macr x0,y0,a  move x:(r2),x1
+     * mac x1,y1,a  move a,x:(r2)+  move a,x:(r0)+ */
+    0x44E000, 0x445900, 0xF09913, 0x063FA0, 0xF099D2, 0x2000D3, 0x45E200, 0x2000F2, 0x565A00,
+    0x565800,
+    /* samples: move #$1400,r0; passes: move #1,r5  movep r5,x:$ffffc4  jmp $100 */
+    0x60F400, 0x001400, 0x350100, 0x08D504, 0x0AF080, 0x000100,
+};
+static const uint32_t k_bench_linear[] = {
+    /* move #$1400,r0  move #0.5,y1  do #4,passes  do #192,samples */
+    0x60F400, 0x001400, 0x274000, 0x060480, 0x000111, 0x06C080, 0x00010F,
+    /* move r0,r1  move #0,r4  clr a x:(r1)+,x0 y:(r4)+,y0  rep #63
+     * mac x0,y0,a x:(r1)+,x0 y:(r4)+,y0  macr x0,y0,a  move x:(r0),x1
+     * mac x1,y1,a  move a,x:(r0)+ */
+    0x221100, 0x340000, 0xF09913, 0x063FA0, 0xF099D2, 0x2000D3, 0x45E000, 0x2000F2, 0x565800,
+    /* samples: move #$1400,r0; passes: move #1,r5  movep r5,x:$ffffc4  jmp $100 */
+    0x60F400, 0x001400, 0x350100, 0x08D504, 0x0AF080, 0x000100,
+};
+
+typedef struct {
+    uint32_t p[DSP_PRAM_SIZE], x[DSP_XRAM_SIZE], y[DSP_YRAM_SIZE];
+} DspImage;
+
+/* X below the mix buffer's alias (the JIT's X:c00 is the mix buffer) */
+static void load(DSPState *dsp, const DspImage *im)
+{
+    dsp_reset(dsp);
+    for (uint32_t i = 0; i < DSP_PRAM_SIZE; i++) dsp_write_memory(dsp, 'P', i, im->p[i] & 0xffffff);
+    for (uint32_t i = 0; i < 0xc00; i++) dsp_write_memory(dsp, 'X', i, im->x[i] & 0xffffff);
+    for (uint32_t i = 0; i < DSP_YRAM_SIZE; i++) dsp_write_memory(dsp, 'Y', i, im->y[i] & 0xffffff);
+}
+
+/* what an engine leaves: X below c00, Y, the mix buffer */
+typedef struct {
+    double us, worst_us, cycles;
+    uint32_t x[0xc00], y[DSP_YRAM_SIZE], mix[DSP_MIXBUFFER_SIZE];
+} BenchRun;
+
+/* frames GP frames of gp by an engine, after warm ones (the JIT compiles) */
+static void bench_run(const DspImage *gp, bool jit, int warm, int frames, BenchRun *r)
+{
+    setenv("NC_APU_DSP_JIT", jit ? "1" : "0", 1);
+    apu_up(true, false, 1);
+    check(!strcmp(dsp_engine_name(d->gp.dsp), jit ? "JIT" : "interpreter"),
+          jit ? "the frame program runs on the JIT" : "the frame program runs on the interpreter");
+    load(d->gp.dsp, gp);
+    d->gp.regs[NV_PAPU_GPRST] = NV_PAPU_GPRST_GPRST | NV_PAPU_GPRST_GPDSPRST;
+    static float bins[NUM_MIXBINS][NUM_SAMPLES_PER_FRAME];
+    double total = 0, cycles = 0, worst = 0;
+    for (int f = -warm; f < frames; f++) {
+        for (int b = 0; b < NUM_MIXBINS; b++) {
+            for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
+                const int n = (f + warm) * NUM_SAMPLES_PER_FRAME + i;
+                bins[b][i] = b < 6 ? (float)(0.25 * sin(2 * M_PI * (220.0 + 110 * b) * n / 48000)) : 0.0f;
+            }
+        }
+        const int64_t t0 = apu_host_us();
+        mcpx_apu_dsp_frame(d, bins);
+        const double us = (double)(apu_host_us() - t0);
+        if (f >= 0) {
+            total += us;
+            worst = fmax(worst, us);
+            cycles += d->gp.dsp->core.cycle_count;
+        }
+    }
+    r->us = total / frames;
+    r->worst_us = worst;
+    r->cycles = cycles / frames;
+    for (uint32_t i = 0; i < 0xc00; i++) r->x[i] = dsp_read_memory(d->gp.dsp, 'X', i);
+    for (uint32_t i = 0; i < DSP_YRAM_SIZE; i++) r->y[i] = dsp_read_memory(d->gp.dsp, 'Y', i);
+    memcpy(r->mix, d->gp.dsp->core.mixbuffer, sizeof(r->mix));
+    apu_down();
+}
+
+static bool same_memory(const BenchRun *a, const BenchRun *b)
+{
+    return !memcmp(a->x, b->x, sizeof(a->x)) && !memcmp(a->y, b->y, sizeof(a->y)) &&
+           !memcmp(a->mix, b->mix, sizeof(a->mix));
+}
+
+static void bench_pair(const char *what, const DspImage *gp)
+{
+    static BenchRun runs[2];
+    const int frames = 1500;
+    for (int jit = 0; jit < 2; jit++) {
+        bench_run(gp, jit, 200, frames, &runs[jit]);
+        printf("bench %s, %-11s %8.1f us a frame (worst %7.1f), %6.0f cycles a frame: %7.1f MHz, %.1fx real time\n",
+               what, jit ? "JIT" : "interpreter", runs[jit].us, runs[jit].worst_us, runs[jit].cycles,
+               runs[jit].cycles / runs[jit].us, 1e6 / 1500 / runs[jit].us);
+    }
+    /* the first word that differs, and each engine's memory hash (FNV-1a:
+     * another host's JIT against this one's) */
+    char diff[96] = "the same";
+    const struct { const char *name; size_t off, n; } spaces[] = {
+        {"X", offsetof(BenchRun, x), 0xc00}, {"Y", offsetof(BenchRun, y), DSP_YRAM_SIZE},
+        {"mix", offsetof(BenchRun, mix), DSP_MIXBUFFER_SIZE},
+    };
+    uint64_t hash[2] = {1469598103934665603ull, 1469598103934665603ull};
+    unsigned differ = 0;
+    for (size_t k = 0; k < sizeof(spaces) / sizeof(spaces[0]); k++) {
+        const uint32_t *a = (const uint32_t *)((const char *)&runs[0] + spaces[k].off);
+        const uint32_t *b = (const uint32_t *)((const char *)&runs[1] + spaces[k].off);
+        for (size_t i = 0; i < spaces[k].n; i++) {
+            hash[0] = (hash[0] ^ a[i]) * 1099511628211ull;
+            hash[1] = (hash[1] ^ b[i]) * 1099511628211ull;
+            if (a[i] != b[i] && !differ++) {
+                snprintf(diff, sizeof(diff), "differ from %s:$%04zx (%06x, JIT %06x)", spaces[k].name, i, a[i], b[i]);
+            }
+        }
+    }
+    printf("bench %s: the JIT %.1fx the interpreter's speed; after %d frames their memories %s, %u words; "
+           "hashes %016llx, JIT %016llx\n", what, runs[0].us / runs[1].us, frames + 200, diff, differ,
+           (unsigned long long)hash[0], (unsigned long long)hash[1]);
+}
+
+static void builtin(DspImage *gp, const uint32_t *frame, size_t words)
+{
+    memset(gp, 0, sizeof(*gp));
+    gp->p[0] = 0x0AF080;   /* jmp $100 */
+    gp->p[1] = 0x000100;
+    memcpy(gp->p + 0x100, frame, words * sizeof(*frame));
+    for (int i = 0; i < 64; i++) {
+        gp->y[i] = (uint32_t)(int32_t)(0x7fffff * 0.9 * sin(M_PI * (i + 1) / 65) / 64) & 0xffffff;
+    }
+}
+
+/* The engines on the linear frame program: the same memory. Not yet the
+ * modulo one: the pinned JIT's inline REP and DO loops address through Rn
+ * as it was before a modulo update (its jit_update_rn path), on AArch64 as
+ * on x86-64; single steps agree. */
+static void test_engines_agree(void)
+{
+    static DspImage gp;
+    static BenchRun runs[2];
+    builtin(&gp, k_bench_linear, ARRAY_SIZE(k_bench_linear));
+    bench_run(&gp, false, 0, 20, &runs[0]);
+    bench_run(&gp, true, 0, 20, &runs[1]);
+    check(same_memory(&runs[0], &runs[1]),
+          "the JIT leaves the interpreter's memory after 20 frames of a 64-tap FIR and a comb");
+}
+
+static int bench(void)
+{
+    static DspImage gp;
+    g_ram = calloc(1, RAM_SIZE);
+    builtin(&gp, k_bench_modulo, ARRAY_SIZE(k_bench_modulo));
+    bench_pair("modulo", &gp);
+    builtin(&gp, k_bench_linear, ARRAY_SIZE(k_bench_linear));
+    bench_pair("linear", &gp);
+    free(g_ram);
+    return failures ? 1 : 0;
+}
+
+int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
+    if (argc > 1 && !strcmp(argv[1], "bench")) {
+        unsetenv("NC_APU_GP_PROBE");
+        return bench();
+    }
     alarm(25);
     setenv("NC_APU_DSP_JIT", "1", 1);
     unsetenv("NC_APU_GP_PROBE");
@@ -360,6 +531,7 @@ int main(void)
     test_frames_and_power();
     g_ram = malloc(RAM_SIZE);
     test_apu_and_states();
+    test_engines_agree();
     free(g_ram);
     g_apu_config.use_dsp = false;
     Scratch scratch = {0};

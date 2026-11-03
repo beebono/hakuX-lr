@@ -387,30 +387,33 @@ int main(int argc, char **argv)
     }
     alarm(60);
     printf("sinc in this build: %s\n", vp_resample_sinc_available() ? "yes" : "no");
-#if defined(__aarch64__)
-    check(vp_resample_sinc_available(), "the core is built with the NEON sinc");
-    const int qs = 2;
+    check(vp_resample_sinc_available(), "the core is built with the sinc (NEON; x86-64: AVX2+FMA, SSE2)");
+#if defined(__x86_64__)
+    /* each vector level (vp/simd.h), capped at the VP's start by NC_APU_SIMD;
+     * the CPU's own where it has no AVX2 */
+    static const char *const caps[] = {"avx2", "sse2", "scalar"};
 #else
-    /* sinc is NEON's: elsewhere (the x86-64 build, #56) voices resample linearly */
-    check(!vp_resample_sinc_available(), "without NEON the core has no sinc");
-    const int qs = 1;
+    static const char *const caps[] = {"neon"};
 #endif
-    int end[2];
-    long heard[2], lead[2];
-    for (int q = 0; q < qs; q++) {
-        test_levels_and_loop(q);
-        test_pitch_every_frame(q);
-        test_end(q, &end[q], &heard[q], &lead[q]);
-        test_short(q);
-        test_reuse(q);
-        test_stream_starve_recover(q);
-        test_adpcm_loop(q);
-    }
-    /* sinc against linear at a voice's end: its position runs at most its
-     * filter's look-ahead (16 frames) further ahead */
-    if (qs == 2) {
+    for (size_t c = 0; c < sizeof(caps) / sizeof(caps[0]); c++) {
+        setenv("NC_APU_SIMD", caps[c], 1);
+        printf("vector paths: %s\n", caps[c]);
+        int end[2];
+        long heard[2], lead[2];
+        for (int q = 0; q < 2; q++) {
+            test_levels_and_loop(q);
+            test_pitch_every_frame(q);
+            test_end(q, &end[q], &heard[q], &lead[q]);
+            test_short(q);
+            test_reuse(q);
+            test_stream_starve_recover(q);
+            test_adpcm_loop(q);
+        }
+        /* sinc against linear at a voice's end: its position runs at most its
+         * filter's look-ahead (16 frames) further ahead */
         check(lead[1] - lead[0] <= 16, "sinc's position lead against linear's");
     }
+    unsetenv("NC_APU_SIMD");
     free(g_ram);
     return failures ? 1 : 0;
 }

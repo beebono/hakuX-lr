@@ -46,12 +46,15 @@ its system instructions come to the kernel as they do from FEX. It needs
 `/dev/kvm` with TSC scaling and UMIP (`container run` on a Mac has neither:
 build there, run on an x86-64 Linux machine or in CI, which hands the
 container its runner's `/dev/kvm`). `kvm-smoke` checks the backend itself;
-the other tests run as on ARM64. Voices resample linearly without NEON;
-the DSP JIT is off and audio processing defaults to Fast. Releases include
-an experimental x86-64 archive; see the
+the other tests run as on ARM64. The audio is ARM64's: the DSP JIT
+(Cranelift emits x86-64 code) and Full DSP by default, and the sinc
+resampler and the HRTF filter through AVX2 with FMA where the CPU has them
+(x86-64-v3: Haswell, Zen and later; the same samples as NEON's), SSE2
+otherwise, chosen at run time; `NC_APU_SIMD=sse2|scalar` caps the level.
+Releases include an experimental x86-64 archive; see the
 [installation guide](../README.md#play-on-amd64-x86-64-linux-systems).
 
-The Linux ARM64 build enables `HAKUX_DSP_JIT` by default. It builds
+The Linux builds (ARM64 and x86-64) enable `HAKUX_DSP_JIT` by default. It builds
 dsp56300 0.1.3 from pinned sources using Cargo's locked dependencies;
 release archives include their license notices and Rust toolchain version.
 `-DHAKUX_DSP_JIT=OFF` builds the C interpreter without requiring Rust.
@@ -144,7 +147,7 @@ except Crop Overscan and Rumble, which update immediately:
 | `hakux_video_region` | `auto` (the game's region), `ntsc-m`, `ntsc-j`, `pal` | `auto` |
 | `hakux_rumble` | `disabled`, `enabled` (controller vibration) | `disabled` |
 | `hakux_network` | `disabled` (no cable), `lan` (system link), `insignia` (Xbox Live through Insignia via NAT) | `disabled` |
-| `hakux_audio_resampler` | `sinc` (higher quality, 32-tap filter using ARM NEON), `linear` (less CPU, softer high frequencies; fallback on non-ARM64 builds) | `sinc` |
+| `hakux_audio_resampler` | `sinc` (higher quality, 32-tap filter; NEON on ARM64, AVX2+FMA or SSE2 on x86-64), `linear` (less CPU, softer high frequencies) | `sinc` |
 | `hakux_audio_processing` | `fast` (dry mix), `dsp` (Xbox effects and stereo downmix; experimental) | `dsp` with JIT, otherwise `fast` |
 
 Full DSP uses the DSP56300 JIT and is the default when compiled in. `NC_APU_DSP=0|1`
