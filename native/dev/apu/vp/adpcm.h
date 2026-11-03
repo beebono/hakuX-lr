@@ -86,8 +86,9 @@ static int adpcm_decode_block (int16_t *outbuf, const uint8_t *inbuf, size_t inb
         *outbuf++ = pcmdata[ch] = (int16_t) (inbuf [0] | (inbuf [1] << 8));
         index[ch] = inbuf [2];
 
-        if (index [ch] < 0 || index [ch] > 88 || inbuf [3])     // sanitize the input a little...
-            return 0;
+        // Some titles set the reserved fourth header byte. Clamp the signed
+        // step index to the table bounds; bytes above 127 become negative.
+        CLIP(index[ch], 0, 88);
 
         inbufsize -= 4;
         inbuf += 4;
