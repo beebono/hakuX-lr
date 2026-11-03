@@ -182,8 +182,8 @@ On PortareOS, **Home + Start** returns to the launcher.
 ## Picture and audio
 
 These settings are in **Quick Menu → Core Options**. Close and reopen the
-game after changing them. **Crop Overscan** and **Rumble** take effect
-immediately.
+game after changing them. **Crop Overscan**, **Rumble** and **Frame Pacing**
+take effect immediately.
 
 | Setting | When to change it |
 | --- | --- |
@@ -192,6 +192,7 @@ immediately.
 | Crop Overscan | On by default to hide borders around the picture. Turn it off to show the full frame. |
 | Audio Processing | Defaults to **Full DSP (experimental)**, which runs Xbox audio effects. Try **Fast** if audio crackles or a game runs slowly. |
 | Audio Resampler | Defaults to **Sinc**. Try **Linear** to reduce CPU use at the cost of some audio quality. |
+| Frame Pacing | Off by default (experimental). If a game runs slowly and the controls feel delayed, **On** holds the game to the pace the GPU draws at, so it can't run ahead of the picture. **Lowest Latency** waits one frame less but may lower the frame rate. |
 
 ## Saves
 

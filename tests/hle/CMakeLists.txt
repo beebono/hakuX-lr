@@ -61,6 +61,7 @@ hle_test(test_psh)
 hle_test(test_cheats)
 hle_test(test_vkcompat)
 hle_test(test_batch_wrap)
+hle_test(test_pace)
 # the back end's sources and the batch's wrappers, read at run time
 file(GLOB HLE_VK_SOURCES ${REPO_ROOT}/hw/xbox/hle/vk/*.c)
 list(JOIN HLE_VK_SOURCES "|" HLE_VK_SOURCES_STR)

@@ -10,6 +10,7 @@
 #include "hw/xbox/hle/hitch.h"
 #include "hw/xbox/hle/pb/objslot.h"
 #include "hw/xbox/hle/pb/pbmode.h"
+#include "hw/xbox/hle/pb/pace.h"
 #include "hw/xbox/hle/pb/pbstate.h"
 #include "hw/xbox/hle/pb/wclip.h"
 #include "hw/xbox/hle/vk/back.h"
@@ -1483,6 +1484,83 @@ static void front_stale(const PbObj *o)
 
 static void shown_part(const PbObj *o, uint32_t ax, uint32_t ay, uint32_t *w, uint32_t *h);
 
+/* The frame pace (pbmode.c's decode loop stalls on it): without it the
+ * guest's push ring holds however far the renderer is behind (Sega GT 2002
+ * on a Mali-G52: ~25 frames, the flip reaching the display 1030-1130 ms
+ * later) and the pad is read by a simulation the screen shows a second
+ * later. After a swap the decoder stops, as at a FLIP_STALL, until the GPU
+ * has finished the swap `depth` before it; the ring fills, and the guest,
+ * stalling on ring space in its own frame loop, throttles itself to the
+ * render pace. Two back by default: one frame queued behind the one the
+ * GPU runs, so it never runs dry at the swap. The wait is a timeline note
+ * that kicks the decoder, which meanwhile serves the guest's stores and
+ * render-target reads (it is stalled, not blocked). The depth is the
+ * front end's (hle_host_frame_pace: the libretro core's Frame Pacing, off
+ * by default); debug.hakux.pace (0 off, 1-3 swaps back) overrides it, read
+ * at each swap. Each swap also counts how far the decoder is ahead of the
+ * GPU, pacing on or off, for the diagnostics' line (hle_pbd_pace_stats).
+ * Reset with the decoder (hle_pbd_reset). */
+#define PACE_RING 64                    /* swaps the lead is counted over (pace.h) */
+static struct {
+    uint64_t swap[PACE_RING];           /* the last swaps' values, by g_pd.swaps */
+    uint64_t want;                      /* the value the decoder stalls for */
+    uint32_t seq, reached;              /* stalls, and the last the GPU reached (atomic) */
+    int depth;                          /* the last swap's (atomic) */
+    uint64_t ahead_sum, ahead_n;        /* the lead at each swap (atomic) */
+    unsigned ahead_max;                 /* ... the most since the diagnostics' last look */
+    uint64_t no_room;                   /* stalls not made: the note queue was full */
+} g_pace;
+
+static void pace_count(void)
+{
+    const unsigned a = hle_pace_ahead(g_pace.swap, PACE_RING, g_pd.swaps, hle_tl_completed());
+    __atomic_store_n(&g_pace.ahead_sum, g_pace.ahead_sum + a, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_pace.ahead_n, g_pace.ahead_n + 1, __ATOMIC_RELAXED);
+    if (a > __atomic_load_n(&g_pace.ahead_max, __ATOMIC_RELAXED)) {
+        __atomic_store_n(&g_pace.ahead_max, a, __ATOMIC_RELAXED);
+    }
+}
+
+void hle_pbd_pace_stats(int *depth, uint64_t *ahead_sum, uint64_t *ahead_n, unsigned *ahead_max,
+                        uint64_t *no_room)
+{
+    *depth = __atomic_load_n(&g_pace.depth, __ATOMIC_RELAXED);
+    *ahead_sum = __atomic_load_n(&g_pace.ahead_sum, __ATOMIC_RELAXED);
+    *ahead_n = __atomic_load_n(&g_pace.ahead_n, __ATOMIC_RELAXED);
+    *ahead_max = __atomic_exchange_n(&g_pace.ahead_max, 0, __ATOMIC_RELAXED);
+    *no_room = __atomic_load_n(&g_pace.no_room, __ATOMIC_RELAXED);
+}
+
+static void pace_landed(uint32_t seq, bool landed)
+{
+    __atomic_store_n(&g_pace.reached, seq, __ATOMIC_RELEASE);
+    hle_pb_kick();
+}
+
+bool hle_pbd_pace_reached(void)
+{
+    return __atomic_load_n(&g_pace.reached, __ATOMIC_ACQUIRE) == g_pace.seq ||
+           hle_tl_completed() >= g_pace.want;
+}
+
+bool hle_pbd_pace(void)
+{
+    char v[NC_PROPERTY_VALUE_MAX];
+    hle_prop_get("debug.hakux.pace", v);
+    const int depth = MAX(MIN(v[0] ? atoi(v) : hle_host_frame_pace(), 3), 0);
+    __atomic_store_n(&g_pace.depth, depth, __ATOMIC_RELAXED);
+    g_pace.want = hle_pace_want(g_pace.swap, PACE_RING, g_pd.swaps, (unsigned)depth);
+    if (!g_pace.want || hle_tl_completed() >= g_pace.want) {
+        return false;
+    }
+    /* no room for the note: no kick would come, so no stall */
+    if (!hle_tl_land_note(g_pace.want, pace_landed, ++g_pace.seq)) {
+        __atomic_store_n(&g_pace.no_room, g_pace.no_room + 1, __ATOMIC_RELAXED);
+        return false;
+    }
+    return !hle_pbd_pace_reached();
+}
+
 /* FLIP_INCREMENT_WRITE: the frame in the colour target is done; it goes to
  * the display (D3D's vblank handler shows it there too). The display scans
  * out D3D's back buffer, whatever is bound: a target smaller than the
@@ -1526,10 +1604,12 @@ static void swap(void)
     __atomic_store_n(&g_pd.shown_ns, hle_now_ns(), __ATOMIC_RELAXED);
     g_pd.shown_written = fo ? fo->written : 0;
     HleCmdSwap *c = begin(HLE_OP_SWAP, sizeof(*c));
-    c->value = hle_fe_next_value();
+    const uint64_t value = c->value = hle_fe_next_value();
     c->swap_id = ++g_pd.swap_ids;
     shown_part(fo, ax, ay, &c->src_w, &c->src_h);
     g_pd.swaps++;
+    g_pace.swap[g_pd.swaps % PACE_RING] = value;    /* (hle_pbd_pace) */
+    pace_count();
     g_pd.epoch++;
     g_pd.kick_ns = hle_now_ns();
     g_pd.vis_unsent = false;                /* a swap submits */
@@ -5169,4 +5249,5 @@ void hle_pbd_reset(void)
     g_wbn_next = 0;
     memset(&g_fill, 0, sizeof(g_fill));
     memset(&g_saved_disp, 0, sizeof(g_saved_disp));
+    memset(&g_pace, 0, sizeof(g_pace));     /* its notes went with the timeline */
 }

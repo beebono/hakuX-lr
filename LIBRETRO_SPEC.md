@@ -347,6 +347,14 @@ Options (`options.c`): only what the emulator backs.
   address in `insignia-dns.txt` in the save directory. XLink Kai and the
   Xbox dashboard, needed to create or recover Insignia accounts, are not
   available yet.
+- Frame pacing (`hakux_frame_pace`, rfandango/hakuX#14), off by default:
+  after each swap the push-buffer decoder waits until the GPU has finished
+  the swap two (On) or one (Lowest Latency) before it, so a game whose
+  rendering falls behind its simulation slows to the render pace instead of
+  queueing frames as input lag. The wait is on the renderer's timeline, not
+  on `retro_run`: RetroArch's menu, a pause or a frame it never takes can't
+  hold it, and the stop's kick ends it. RetroArch's pace already reaches the
+  guest through the vblank lock (section 5) and the title's FLIP_STALL.
 
 Insignia's NAT backend forwards the console's UDP 3074 through the device's
 UDP 3074 and requests a router forward through UPnP for Open NAT. Without
@@ -354,10 +362,12 @@ UPnP, forward that port to the device manually. Native overrides
 `natport=`, `upnp=` and `upnplease=` are documented under
 [Insignia NAT](native/README.linux.md#insignia-nat).
 
-All but the crop are read before the console boots, so a change takes effect
-when the game starts next, and RetroArch shows a message saying so. The crop
-changes from the next frame. No display, VRR, latency, mapping or
-filter options: FXAA and the picture's shape are RetroArch's shaders and
+All but the crop, rumble and frame pacing are read before the console
+boots, so a change takes effect when the game starts next, and RetroArch
+shows a message saying so. The crop changes from the next frame, frame
+pacing at the decoder's next swap. No display, VRR, mapping or filter
+options, and no latency option but frame pacing (off until it is measured
+on the Nova): FXAA and the picture's shape are RetroArch's shaders and
 aspect setting, and SGSR is not offered (owner, 2026-10-25).
 
 Data: the console's hard disk and caches live in the save directory

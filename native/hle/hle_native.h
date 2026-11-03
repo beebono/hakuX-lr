@@ -39,6 +39,10 @@ bool nc_hle_pb_active(void);
 void nc_hle_set_vk_loader(void *gipa);
 /* Before boot: the HLE GPU's render scale (1-4x the title's resolution). */
 void nc_hle_set_render_scale(int scale);
+/* The decoder's frame pace (the app's "Frame pacing" setting): after a swap
+ * it waits for the GPU to finish the swap depth (1-3) before it; 0 off.
+ * Any time: the decoder reads it at each swap. */
+void nc_hle_set_frame_pace(int depth);
 /* Before boot, for a front end that leaves the environment alone: where the
  * HLE keeps its caches (over HAKUX_NATIVE_BASE), and its posture ("replace";
  * HAKUX_HLE_MODE, when set, still decides). */

@@ -110,6 +110,10 @@ enum { HLE_FR_SWAP, HLE_FR_WRITE, HLE_FR_READY, HLE_FR_FRONT, HLE_FR_SHOWN, HLE_
 void hle_hitch_frame(uint32_t id, int stage);
 /* the GPU timeline advanced (render / timeline thread) */
 void hle_hitch_gpu_done(void);
+/* The new frames the UI picked up and their summed time from the decoder's
+ * swap (both from the start, us), the longest since the last call (the
+ * frame pace's line, pbmode.c); 0 with the monitor off. */
+void hle_hitch_pickup_lag(uint64_t *n, uint64_t *sum_us, int64_t *max_us);
 /* overlay text (lines separated by '\n'); false = nothing to show */
 bool hle_hitch_overlay(char *buf, size_t n);
 

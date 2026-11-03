@@ -67,8 +67,8 @@ void nc_lr_video_set_crop(bool on);
 /* options.c — the core options: declared to the frontend
  * (retro_set_environment), applied to the console before it boots
  * (retro_load_game), and a change during the game noted (retro_run): every
- * option but the overscan crop and rumble takes effect when the game starts
- * next. */
+ * option but the overscan crop, rumble and frame pacing takes effect when
+ * the game starts next. */
 void nc_lr_options_declare(retro_environment_t env);
 void nc_lr_options_apply(void);
 void nc_lr_options_run(void);

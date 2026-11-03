@@ -13,6 +13,12 @@
   filter use AVX2 and FMA on CPUs that have them (Intel Haswell, AMD Zen and
   newer), producing the same samples as ARM64's NEON, and SSE2 on older
   CPUs. The voice mix and the output conversion use the same instructions.
+- **Frame Pacing (experimental)** — A core option from rfandango/hakuX#14,
+  off by default. When a game's rendering falls behind its simulation,
+  **On** holds the game to the render pace so unrendered frames don't queue
+  up as input lag; **Lowest Latency** waits one frame less. It switches
+  during play. Each second a game draws, the renderer logs a `frame pace`
+  line for measuring it, pacing on or off.
 
 ### Testing
 

@@ -1,8 +1,9 @@
 /* Copyright (C) 2026-present PortareOS */
 /*
  * Libretro core options (LIBRETRO_SPEC.md section 10).
- * RetroArch handles display filters and aspect ratio. Crop (video.c) and
- * rumble (input.c) update immediately; other options apply at the next boot.
+ * RetroArch handles display filters and aspect ratio. Crop (video.c),
+ * rumble (input.c) and frame pacing (the decoder reads it at each swap)
+ * update immediately; other options apply at the next boot.
  */
 #include "native/libretro/libretro_int.h"
 #include "native/hle/hle_native.h"
@@ -22,7 +23,7 @@
 #endif
 
 enum { OPT_SCALE, OPT_CROP, OPT_FORMAT, OPT_LANGUAGE, OPT_REGION, OPT_RUMBLE, OPT_NETWORK, OPT_RESAMPLER,
-       OPT_PROCESSING, OPT_COUNT };
+       OPT_PROCESSING, OPT_PACE, OPT_COUNT };
 
 /* The language values follow XC_LANGUAGE after auto: english is 1. */
 static struct retro_core_option_v2_definition g_defs[OPT_COUNT + 1] = {
@@ -96,10 +97,37 @@ static struct retro_core_option_v2_definition g_defs[OPT_COUNT + 1] = {
         NULL, NULL,
         {{"fast", "Fast (dry mix)"}, {"dsp", "Full DSP (experimental)"}, {NULL, NULL}},
         AUDIO_PROCESSING_DEFAULT},
+    /* The value is the decoder's depth: the swaps back it waits for the GPU
+     * to finish (pb/pbdraw.c g_pace). */
+    [OPT_PACE] = {
+        "hakux_frame_pace", "Frame Pacing", NULL,
+        "Holds the game to the GPU's rendering pace when the GPU can't keep up, instead of letting "
+        "the game run ahead of the picture and add input lag. On keeps up to two frames waiting for "
+        "the GPU; Lowest Latency keeps one, which may lower the frame rate. Off lets the game run ahead.",
+        NULL, NULL,
+        {{"disabled", "Off"}, {"2", "On"}, {"1", "Lowest Latency"}, {NULL, NULL}},
+        "disabled"},
     {NULL},
 };
 
 static int g_applied[OPT_COUNT];   /* the value each option booted with (its index) */
+
+/* Frame pacing's depth for the option's value index (0: off), and as the
+ * log says it. */
+static int pace_depth(int i)
+{
+    return atoi(g_defs[OPT_PACE].values[i].value);
+}
+
+static const char *pace_text(int i)
+{
+    static char text[16];
+    if (!pace_depth(i)) {
+        return "off";
+    }
+    snprintf(text, sizeof(text), "%d back", pace_depth(i));
+    return text;
+}
 
 /* A frontend without the v2 options (or v1, which adds nothing used here):
  * the legacy variables, "Description; default|other|...". */
@@ -218,10 +246,12 @@ void nc_lr_options_apply(void)
     nc_dev_apu_set_resampler(sinc);
     const bool dsp = !strcmp(g_defs[OPT_PROCESSING].values[g_applied[OPT_PROCESSING]].value, "dsp");
     nc_dev_apu_set_dsp(dsp);
+    nc_hle_set_frame_pace(pace_depth(g_applied[OPT_PACE]));
     nc_log("hakuX-libretro", "options: render scale %dx, overscan %s, screen %s, language %d (%s), video region %s, "
-           "rumble %s, network %s, resampler %s, audio processing %s", scale, crop ? "cropped" : "shown", format, language,
-           g_defs[OPT_LANGUAGE].values[g_applied[OPT_LANGUAGE]].value, region, rumble ? "on" : "off",
-           strcmp(network, "disabled") ? network : "off", sinc ? "sinc" : "linear", dsp ? "dsp" : "fast");
+           "rumble %s, network %s, resampler %s, audio processing %s, frame pacing %s", scale,
+           crop ? "cropped" : "shown", format, language, g_defs[OPT_LANGUAGE].values[g_applied[OPT_LANGUAGE]].value,
+           region, rumble ? "on" : "off", strcmp(network, "disabled") ? network : "off", sinc ? "sinc" : "linear",
+           dsp ? "dsp" : "fast", pace_text(g_applied[OPT_PACE]));
 }
 
 void nc_lr_options_run(void)
@@ -240,10 +270,18 @@ void nc_lr_options_run(void)
         g_applied[OPT_RUMBLE] = rumble;
         nc_lr_input_set_rumble(strcmp(g_defs[OPT_RUMBLE].values[rumble].value, "enabled") == 0);
     }
+    /* the decoder takes it at its next swap; a stall it is in ends as it would */
+    const int pace = value_of(OPT_PACE);
+    if (pace != g_applied[OPT_PACE]) {
+        g_applied[OPT_PACE] = pace;
+        nc_hle_set_frame_pace(pace_depth(pace));
+        nc_log("hakuX-libretro", "options: frame pacing %s", pace_text(pace));
+    }
     char names[256] = "";
     size_t n = 0;
     for (int i = 0; i < OPT_COUNT; i++) {
-        if (i != OPT_CROP && i != OPT_RUMBLE && value_of(i) != g_applied[i] && n < sizeof(names)) {
+        if (i != OPT_CROP && i != OPT_RUMBLE && i != OPT_PACE && value_of(i) != g_applied[i] &&
+            n < sizeof(names)) {
             n += (size_t)snprintf(names + n, sizeof(names) - n, "%s%s", n ? ", " : "", g_defs[i].desc);
         }
     }

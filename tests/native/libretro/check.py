@@ -210,7 +210,8 @@ def main():
                                        'option: hakux_video_region (Video Region), default auto',
                                        'option: hakux_rumble (Rumble), default disabled',
                                        'option: hakux_audio_resampler (Audio Resampler), default sinc',
-                                       f'option: hakux_audio_processing (Audio Processing), default {args.audio_default}'))
+                                       f'option: hakux_audio_processing (Audio Processing), default {args.audio_default}',
+                                       'option: hakux_frame_pace (Frame Pacing), default disabled'))
     with tempfile.TemporaryDirectory(prefix='hakux-libretro-') as folder:
         root = Path(folder)
         (root / 'saves').mkdir()
@@ -277,14 +278,14 @@ def main():
             ('options: render scale 2x, overscan shown, screen normal, language 3 (auto), video region pal',
              'ex: video flags 00400000, AV pack 0, AV region 00800300, language 3'), env)
         # Changed during the game (the menu), they wait for the next start;
-        # the crop and rumble don't. Rumble on asks RetroArch for its
-        # interface, which the harness doesn't have.
+        # the crop, rumble and frame pacing don't. Rumble on asks RetroArch
+        # for its interface, which the harness doesn't have.
         disc(root / 'spin.iso', b'\xeb\xfe')
         env = dict(os.environ, HARNESS_OPTIONS_LATER='hakux_render_scale=3;hakux_video_region=pal;'
-                   'hakux_crop_overscan=disabled;hakux_rumble=enabled')
+                   'hakux_crop_overscan=disabled;hakux_rumble=enabled;hakux_frame_pace=2')
         run([args.harness, args.core, root / 'spin.iso', 60, root / 'saves'], 0,
-            ('options: render scale 2x', 'message: Render Scale, Video Region: restart the game to apply',
-             'rumble: the frontend has none', 'ran 60 frames'), env)
+            ('options: render scale 2x', 'frame pacing off', 'message: Render Scale, Video Region: restart the game to apply',
+             'rumble: the frontend has none', 'options: frame pacing 2 back', 'ran 60 frames'), env)
         # Ports 1-4 are players 1-4, a controller on each by default. A port
         # set to None in RetroArch's menu pulls its controller out while the
         # game runs, and one set back plugs it in; the next boot (here a
