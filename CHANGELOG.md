@@ -2,33 +2,33 @@
 
 ## Unreleased
 
+## linux-v0.17.3 (Linux, aarch64 and x86-64)
+
 ### What's new
 
-- **Vulkan 1.2 drivers** — The core info file, setup script and
-  documentation now require Vulkan 1.2 and recommend 1.3. Drivers below 1.3
-  use the renderer's compatibility path: render passes instead of dynamic
-  rendering, and Vulkan 1.0 barriers and submits instead of
-  synchronization2. The core logs `compat: Vulkan below 1.3` on that path
-  (it said `Vulkan 1.1` for 1.2 drivers as well). The Vulkan loader
-  (`libvulkan.so.1`) must still be 1.3 or newer, and the setup script
-  warns about an older one.
+- **Vulkan 1.2 compatibility** — Requirements and core metadata now reflect
+  the renderer's existing compatibility path. Vulkan 1.3 is recommended.
+  The Vulkan loader (`libvulkan.so.1`) must still be 1.3 or newer; the setup
+  script warns about older loaders.
 
 ### Fixes
 
-- **Render-target dump** — The debug dump (`HAKUX_HLE_RTDUMP_SWAPS`,
-  `debug.hakux.rtdump`) no longer frees its buffer memory a second time
-  when the renderer stops.
+- **Debug frame dumps** — Prevent a second free of buffer memory when the
+  renderer stops after a render-target dump.
+- **Compatibility log** — Report `Vulkan below 1.3` instead of incorrectly
+  identifying Vulkan 1.2 drivers as Vulkan 1.1.
 
 ### Testing
 
-- Check a reset and a video driver rebuild on the compatibility path in
-  `libretro-smoke`.
-- On the AMD64 test machine (Radeon RX 9070), with the Khronos Profiles
-  layer reporting Vulkan 1.2 and hiding the 1.3 extensions: Burnout 3
-  and Dead or Alive 3 run at full speed in RetroArch and the libretro
-  harness, with no Vulkan validation errors (including synchronization
-  validation). Scenes that replay identically match the 1.3 path pixel for
-  pixel. `tools/native/vk-profiles` has the profile.
+- Add compatibility-path smoke tests for resets and video driver rebuilds,
+  plus a Vulkan 1.2 test profile and instructions.
+- On x86-64 with RADV and simulated Vulkan 1.2, Burnout 3 and Dead or Alive 3
+  ran at full speed in the harness without Vulkan validation errors.
+  Dead or Alive 3 also ran at 60 fps in RetroArch. Repeatable scenes matched
+  the normal rendering path pixel for pixel.
+
+Vulkan 1.2 capabilities were simulated on a modern GPU. Real Vulkan 1.2
+hardware was not tested.
 
 ## linux-v0.17.2 (Linux, aarch64 and x86-64)
 
