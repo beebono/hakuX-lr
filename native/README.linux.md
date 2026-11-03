@@ -133,7 +133,7 @@ takes longer than 10 seconds. Set `HAKUX_LR_STOP=0` for the legacy behavior:
 closing a game exits RetroArch, and switching game executables relaunches it.
 
 Core options (`native/libretro/options.c`) apply on the next game start,
-except Crop Overscan and Rumble, which update immediately:
+except Crop Overscan, Rumble and Frame Pacing, which update immediately:
 
 | Key | Values | Default |
 | --- | --- | --- |
@@ -146,6 +146,7 @@ except Crop Overscan and Rumble, which update immediately:
 | `hakux_network` | `disabled` (no cable), `lan` (system link), `insignia` (Xbox Live through Insignia via NAT) | `disabled` |
 | `hakux_audio_resampler` | `sinc` (higher quality, 32-tap filter using ARM NEON), `linear` (less CPU, softer high frequencies; fallback on non-ARM64 builds) | `sinc` |
 | `hakux_audio_processing` | `fast` (dry mix), `dsp` (Xbox effects and stereo downmix; experimental) | `dsp` with JIT, otherwise `fast` |
+| `hakux_frame_pace` | `disabled`, `2` (after each frame the decoder waits for the GPU to finish the frame two before it), `1` (one before it) | `disabled` |
 
 Full DSP uses the DSP56300 JIT and is the default when compiled in. `NC_APU_DSP=0|1`
 overrides the audio processing option; `NC_APU_DSP_JIT=0` selects the C
@@ -180,6 +181,15 @@ The remaining design targets are in [LIBRETRO_SPEC.md](../LIBRETRO_SPEC.md).
 
 `HAKUX_LR_STATS=1` logs time spent in `retro_run`. `HAKUX_DISP_STATS=1`
 logs new frames per second, frame age and gaps between frames in any frontend.
+
+Frame Pacing (from rfandango/hakuX#14) holds a game whose GPU work falls
+behind its simulation to the render pace, so frames don't queue up as input
+lag. Each second a game draws, the renderer logs a `frame pace` line
+(`hakuX-hle-pb`), pacing on or off: the frames, how often and how long the
+decoder was held, how many frames the decoder was ahead of the GPU, and the
+time from the decoder's frame to RetroArch taking it (`HAKUX_HLE_HITCH=0`
+leaves that last part out). `HAKUX_PROP_DEBUG_HAKUX_PACE=0`–`3` overrides the
+option's depth for a run (xboxrun takes `pace=1`).
 
 ## Insignia NAT
 

@@ -196,18 +196,19 @@ int hle_host_render_scale(void)
     return g_render_scale;
 }
 
-/* The decoder's frame pace (pb/pbdraw.c g_pace), the app's "Frame pacing"
- * setting: off unless the front end turns it on (pace=1). */
+/* The decoder's frame pace (pb/pbdraw.c g_pace): the swaps back it waits
+ * for, 0 off (the default). The decoder reads it at each swap, so the
+ * libretro core's option switches it during the game. */
 static int g_frame_pace;
 
-void nc_hle_set_frame_pace(int on)
+void nc_hle_set_frame_pace(int depth)
 {
-    g_frame_pace = on != 0;
+    __atomic_store_n(&g_frame_pace, depth < 0 ? 0 : depth > 3 ? 3 : depth, __ATOMIC_RELAXED);
 }
 
 int hle_host_frame_pace(void)
 {
-    return g_frame_pace;
+    return __atomic_load_n(&g_frame_pace, __ATOMIC_RELAXED);
 }
 
 /* A custom Vulkan driver's entry point (the app loads Turnip through

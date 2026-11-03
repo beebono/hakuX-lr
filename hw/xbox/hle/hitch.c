@@ -102,6 +102,9 @@ static struct {
     unsigned ncad;
     double last_fint;                   /* the last front interval, ms */
     unsigned gtrace_left;               /* debug: GPU event traces still to log */
+    /* the decoder's swap to the pickup, each new frame (hle_hitch_pickup_lag) */
+    uint64_t lag_n, lag_us;             /* atomic */
+    int64_t lag_max;                    /* atomic: the most since the last look */
 } g_h;
 
 static inline double t2ms(int64_t ticks)
@@ -782,8 +785,23 @@ void hle_hitch_frame(uint32_t id, int stage)
     }
     f->t[stage] = g_get_monotonic_time();
     if (stage == HLE_FR_SHOWN) {
+        if (f->t[HLE_FR_SWAP]) {
+            const int64_t lag = f->t[HLE_FR_SHOWN] - f->t[HLE_FR_SWAP];
+            __atomic_add_fetch(&g_h.lag_n, 1, __ATOMIC_RELAXED);
+            __atomic_add_fetch(&g_h.lag_us, (uint64_t)MAX(lag, 0), __ATOMIC_RELAXED);
+            if (lag > __atomic_load_n(&g_h.lag_max, __ATOMIC_RELAXED)) {
+                __atomic_store_n(&g_h.lag_max, lag, __ATOMIC_RELAXED);
+            }
+        }
         display_eval(id, f);
     }
+}
+
+void hle_hitch_pickup_lag(uint64_t *n, uint64_t *sum_us, int64_t *max_us)
+{
+    *n = __atomic_load_n(&g_h.lag_n, __ATOMIC_RELAXED);
+    *sum_us = __atomic_load_n(&g_h.lag_us, __ATOMIC_RELAXED);
+    *max_us = __atomic_exchange_n(&g_h.lag_max, 0, __ATOMIC_RELAXED);
 }
 
 /* ---- overlay ------------------------------------------------------------------- */

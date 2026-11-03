@@ -113,7 +113,7 @@ the frame rate and the core's time per frame.
    return to the launcher. Elsewhere, load another game in the same session.
 6. **Core options:** Render Scale, Screen Format, Language, Video Region,
    Network and Audio Resampler apply after restarting the game. Crop
-   Overscan and Rumble update immediately.
+   Overscan, Rumble and Frame Pacing update immediately.
 7. **Game saves:** save in-game, close it, then reopen and load the save.
 8. **Game executable changes:** compilations and demo discs should continue
    when launching another program, without returning to the frontend.

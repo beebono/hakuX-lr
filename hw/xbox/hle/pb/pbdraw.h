@@ -116,6 +116,11 @@ void hle_pbd_front_serve(void);
  * kicks it then (hle_pb_kick), and hle_pbd_pace_reached says it has. */
 bool hle_pbd_pace(void);
 bool hle_pbd_pace_reached(void);
+/* The diagnostics' (any thread): the depth at the last swap (0 off), the
+ * swaps counted and their summed lead over the GPU (both from the start),
+ * the most since the last call, and the stalls not made (note queue full). */
+void hle_pbd_pace_stats(int *depth, uint64_t *ahead_sum, uint64_t *ahead_n, unsigned *ahead_max,
+                        uint64_t *no_room);
 /* Any thread: nothing presented for a while (the title isn't flipping), so
  * the display's memory is worth a look (hle_pbd_scanout). */
 bool hle_pbd_scan_due(void);

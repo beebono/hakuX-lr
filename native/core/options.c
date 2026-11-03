@@ -43,7 +43,7 @@ bool nc_option(NcOptions *o, const char *arg)
     } else if ((v = value(arg, "version="))) {
         nc_state_set_core_version(v);
     } else if ((v = value(arg, "pace="))) {
-        nc_hle_set_frame_pace(atoi(v));
+        nc_hle_set_frame_pace(atoi(v) ? 2 : 0); /* the app's on: two swaps back */
     } else if ((v = value(arg, "scale="))) {
         nc_hle_set_render_scale(atoi(v));
         nc_log("hakuX-app", "render scale %sx", v);

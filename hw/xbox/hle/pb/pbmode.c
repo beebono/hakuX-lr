@@ -100,6 +100,9 @@ static struct {
     bool trap_wait;                     /* a software trap until the ISR clears it */
     bool pace_wait;                     /* after a swap, the frame pace (hle_pbd_pace) */
     uint64_t paces;                     /* ... stalls */
+    int64_t pace_t0;                    /* ... the one now since */
+    uint64_t pace_ns;                   /* ... the time they held the decoder */
+    int64_t pace_max_ns;                /* ... the longest since the diagnostics' last line (atomic) */
     uint32_t sub_r[8][0x400 / 4];       /* the 2D objects' methods, by subchannel */
     uint32_t s2d[0x400 / 4];            /* the 2D surfaces' (one at a time in D3D) */
     uint64_t blits, blit_bytes, m2mfs, m2mf_bytes, copies_skipped;
@@ -815,6 +818,7 @@ static int count_method(void *opaque, unsigned subch, uint32_t m, uint32_t v)
              * FLIP_STALL until the GPU is close enough behind it */
             g_pb.pace_wait = true;
             g_pb.paces++;
+            g_pb.pace_t0 = hle_now_ns();
             return HLE_PB_STALL;
         }
         return r;
@@ -922,6 +926,11 @@ static void consume_pass(void)
         }
         g_pb.pace_wait = false;
         hle_host_gpu_trace(HLE_GTR_RESUME, 3);
+        const int64_t held = hle_now_ns() - g_pb.pace_t0;
+        __atomic_store_n(&g_pb.pace_ns, g_pb.pace_ns + (uint64_t)held, __ATOMIC_RELAXED);
+        if (held > __atomic_load_n(&g_pb.pace_max_ns, __ATOMIC_RELAXED)) {
+            __atomic_store_n(&g_pb.pace_max_ns, held, __ATOMIC_RELAXED);
+        }
     }
     uint32_t base, limit, inst;
     uint32_t put = hle_host_gpu_reg(NV_PFIFO_CACHE1_DMA_PUT);
@@ -1534,7 +1543,9 @@ void hle_pb_debug_pos(uint32_t *get, uint32_t *put)
 
 void hle_pb_kick(void)
 {
-    if (g_pb.on) {
+    /* not once it stops: the timeline's notes (the frame pace's) may land
+     * while hle_pb_stop destroys the semaphore */
+    if (g_pb.on && !g_pb.stop) {
         hle_atomic_inc(&g_pb.kicks);
         hle_sem_post(&g_pb.kick);
     }
@@ -1608,7 +1619,60 @@ static struct {
     uint32_t hist[8][PB_METHODS];
     uint64_t words, heads, cu, coh, rw;
     uint32_t kicks;
+    uint64_t swaps, paces, pace_ns, ahead_sum, ahead_n, no_room, lag_n, lag_us;   /* pace_diag's */
 } g_diag;
+
+/* The frame pace's line, each second the title swapped (pbdraw.c g_pace),
+ * pacing on or off: its depth, the swaps, the stalls after them and the
+ * time they held the decoder (the longest), how many swaps the decoder was
+ * ahead of the GPU at each, and the decoder's swap to the frame's pickup by
+ * the front end (the hitch monitor's stamps; RetroArch's retro_run in the
+ * libretro core). With pacing on, the guest waits for ring space before
+ * its swap reaches the decoder: that wait isn't in the pickup's time. */
+static void pace_diag(uint64_t swaps)
+{
+    if (swaps == g_diag.swaps) {
+        return;
+    }
+    int depth;
+    uint64_t asum, an, no_room, ln, lus;
+    unsigned amax;
+    int64_t lmax;
+    hle_pbd_pace_stats(&depth, &asum, &an, &amax, &no_room);
+    hle_hitch_pickup_lag(&ln, &lus, &lmax);
+    const uint64_t paces = g_pb.paces, pns = __atomic_load_n(&g_pb.pace_ns, __ATOMIC_RELAXED);
+    const int64_t pmax = __atomic_exchange_n(&g_pb.pace_max_ns, 0, __ATOMIC_RELAXED);
+    /* a new title's decoder counts from 0 again: the next line's from here */
+    if (swaps > g_diag.swaps && paces >= g_diag.paces) {
+        char mode[16] = "off", room[48] = "", lag[96] = "";
+        if (depth) {
+            snprintf(mode, sizeof(mode), "%d back", depth);
+        }
+        if (no_room > g_diag.no_room) {
+            snprintf(room, sizeof(room), ", %llu not (note queue full)",
+                     (unsigned long long)(no_room - g_diag.no_room));
+        }
+        if (ln > g_diag.lag_n) {
+            snprintf(lag, sizeof(lag), "; swap to pickup %.1f ms (max %.1f, %llu frames)",
+                     (double)(lus - g_diag.lag_us) / (double)(ln - g_diag.lag_n) / 1e3, (double)lmax / 1e3,
+                     (unsigned long long)(ln - g_diag.lag_n));
+        }
+        const double ahead = an > g_diag.ahead_n ? (double)(asum - g_diag.ahead_sum) /
+                                                    (double)(an - g_diag.ahead_n) : 0.0;
+        hle_log("hakuX-hle-pb", "frame pace %s: %llu swaps, the decoder held after %llu for %.1f ms "
+                "(max %.1f)%s; ahead of the GPU %.2f swaps (max %u)%s", mode,
+                (unsigned long long)(swaps - g_diag.swaps), (unsigned long long)(paces - g_diag.paces),
+                (double)(pns - g_diag.pace_ns) / 1e6, (double)pmax / 1e6, room, ahead, amax, lag);
+    }
+    g_diag.swaps = swaps;
+    g_diag.paces = paces;
+    g_diag.pace_ns = pns;
+    g_diag.ahead_sum = asum;
+    g_diag.ahead_n = an;
+    g_diag.no_room = no_room;
+    g_diag.lag_n = ln;
+    g_diag.lag_us = lus;
+}
 
 void hle_pb_diag(void)
 {
@@ -1739,6 +1803,7 @@ void hle_pb_diag(void)
     g_diag.kicks = kicks;
     g_diag.words = words;
     g_diag.heads = heads;
+    pace_diag(swaps);
     const uint64_t cu = __atomic_load_n(&g_cu.waits, __ATOMIC_RELAXED);
     if (cu != g_diag.cu) {
         g_diag.cu = cu;
