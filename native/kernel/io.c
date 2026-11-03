@@ -2106,19 +2106,24 @@ typedef struct DirEntry {
     bool dir;
 } DirEntry;
 
+/* In order over the tree (a listing sorted as the disc keeps it). No depth
+ * cap: a tree can be one long chain (Conker's dvddata\Audio is 77 deep).
+ * Every entry takes at least 16 bytes: *budget, size / 16 + 1 visits at
+ * first, bounds a well-formed walk, and a looping one. */
 static void disc_dir_walk(const uint8_t *dir, uint32_t size, uint32_t off, DirEntry *out, unsigned *n, unsigned cap,
-                          unsigned depth)
+                          uint32_t *budget)
 {
-    if (off + 14 > size || depth > 64 || *n >= cap) {
+    if (off + 14 > size || !*budget || *n >= cap) {
         return;
     }
+    --*budget;
     const uint8_t *e = dir + off;
     const uint16_t left = nc_rd16(e), right = nc_rd16(e + 2);
     if (left == 0xFFFF && right == 0xFFFF && e[12] == 0xFF) {
         return;
     }
     if (left && left != 0xFFFF) { /* 0: no subtree */
-        disc_dir_walk(dir, size, left * 4u, out, n, cap, depth + 1);
+        disc_dir_walk(dir, size, left * 4u, out, n, cap, budget);
     }
     const uint8_t nlen = e[13];
     if (*n < cap && off + 14 + nlen <= size && nlen < sizeof(out->name)) {
@@ -2129,7 +2134,7 @@ static void disc_dir_walk(const uint8_t *dir, uint32_t size, uint32_t off, DirEn
         d->dir = e[12] & 0x10;
     }
     if (right && right != 0xFFFF) {
-        disc_dir_walk(dir, size, right * 4u, out, n, cap, depth + 1);
+        disc_dir_walk(dir, size, right * 4u, out, n, cap, budget);
     }
 }
 
@@ -2165,7 +2170,8 @@ static unsigned list_dir(NcKernel *k, const NcFile *nf, DirEntry *out, unsigned 
         if (nf->disc.size && nf->disc.sector < NC_DISC_OVERLAY) {
             uint8_t *dir = malloc(nf->disc.size);
             if (dir && nc_disc_read(k->disc, &nf->disc, 0, dir, nf->disc.size)) {
-                disc_dir_walk(dir, nf->disc.size, 0, out, &n, cap, 0);
+                uint32_t budget = nf->disc.size / 16 + 1;
+                disc_dir_walk(dir, nf->disc.size, 0, out, &n, cap, &budget);
             }
             free(dir);
         }
