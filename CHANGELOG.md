@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+## linux-v0.18.1-exp.1 (Linux, aarch64 and x86-64, experimental)
+
+A fix for Vulkan 1.3 GPUs without descriptor indexing, for testing on
+ROCKNIX's S922X (Mali-G52). It's a pre-release; 0.18.0 stays the latest
+stable release, and everything else is as in 0.18.0.
+
+### Fixes
+
+- **Vulkan 1.3 GPUs without descriptor indexing** — On a Vulkan 1.3
+  driver, the core asked for four descriptor-indexing features even when
+  it used its fixed-size descriptor sets, which need none of them. Vulkan
+  1.3 doesn't require these features, and a driver without them refuses to
+  create the device, so the core can't start. It now asks for them only for
+  its bindless descriptor set, as it already did below 1.3. ROCKNIX's first
+  test on the S922X (Mali-G52, Arm's driver) stopped at device creation
+  with an unsupported feature.
+- **Device creation in the log** — Before creating the device, the core
+  logs the GPU, its Vulkan version, the driver and its release, and each
+  feature it asks for that the GPU doesn't report, as `vk: features: ...
+  asked for, not supported`. A failed start now shows them.
+
+### Testing
+
+On an AMD GPU made to report Vulkan 1.3 without these features (the
+`VP_HAKUX_vk13_nodi` profile, see TESTING.md), Burnout 3 ran on the
+fixed-size descriptor sets with no validation errors or warnings. It hasn't
+run on a Mali yet. If the core still doesn't start there, the `vk:
+features:` lines in the log name what the GPU lacks.
+
+Implementation: [Vulkan 1.3 without descriptor indexing](https://github.com/portare-ch/hakuX-lr/pull/79).
+
 ## linux-v0.18.0 (Linux, aarch64 and x86-64)
 
 Adds RetroArch cheats, optional frame pacing, and Full DSP and sinc audio
