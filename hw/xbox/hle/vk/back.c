@@ -1100,6 +1100,7 @@ static void rtd_write(uint64_t value)
         T.vkDestroyBuffer(g_hvk.dev, g_rtd.buf, NULL);
         T.vkFreeMemory(g_hvk.dev, g_rtd.mem, NULL);
         g_rtd.buf = VK_NULL_HANDLE;
+        g_rtd.mem = VK_NULL_HANDLE;     /* Avoid a double free at shutdown. */
     }
 }
 

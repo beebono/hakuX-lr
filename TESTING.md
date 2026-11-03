@@ -61,6 +61,13 @@ systemctl start portarelauncher
 - **System:** ARM64 (aarch64) Linux with glibc 2.38 or newer, libstdc++ from
   GCC 13 or newer, and zlib.
 - **GPU driver:** Vulkan 1.3. Tested with Mesa Turnip on Adreno 740.
+  Vulkan 1.2 drivers use a compatibility path, which can be slower:
+  the core's log then says `compat: Vulkan below 1.3`, or names the missing
+  feature if the driver can't run the core.
+- **Vulkan loader:** `libvulkan.so.1` 1.3 or newer, even with a 1.2 driver.
+  The core asks for a Vulkan 1.3 instance, and RetroArch refuses it on an
+  older loader: `Core requests apiVersion 1.3, but it is not supported by
+  loader`.
 - **RetroArch:** with its `vulkan` video driver. 1.22.2 as PortareOS builds it
   is tested. Other video drivers copy frames through the CPU and are intended
   for diagnostics.
@@ -170,6 +177,36 @@ Other variables are described at the top of
 Dashboard relaunches with `HAKUX_LR_STOP=0` still need checking in real
 RetroArch on a device: starts with `-s <directory>`, **Load Core → Start Core**,
 and `-L <core> --menu`. Confirm that restarts keep the save directory.
+
+### Drivers below Vulkan 1.3
+
+A Vulkan 1.3 GPU can run the renderer's compatibility path, which Vulkan 1.2
+drivers use. It replaces dynamic rendering with render
+passes and synchronization2 with Vulkan 1.0's barriers and submits
+([compat.c](hw/xbox/hle/vk/compat.c)). There are two ways to test it:
+
+- **In the core:** `HAKUX_HLE_CAPS=-vk13,-dynrender,-sync2,-eds1,-eds2`
+  turns those features off. `libretro-smoke` checks a reset and a video
+  driver rebuild this way.
+- **For the whole process:** the Khronos Profiles layer
+  (`VK_LAYER_KHRONOS_profiles`, in the `vulkan-profiles` package on Arch)
+  makes the GPU report Vulkan 1.2 to RetroArch and the core, and hides the
+  1.3 extensions:
+
+  ```sh
+  export VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_profiles
+  export VK_KHRONOS_PROFILES_PROFILE_DIRS="$PWD/tools/native/vk-profiles"
+  export VK_KHRONOS_PROFILES_PROFILE_NAME=VP_HAKUX_vk12
+  export VK_KHRONOS_PROFILES_SIMULATE_CAPABILITIES=SIMULATE_API_VERSION_BIT
+  export VK_KHRONOS_PROFILES_EMULATE_PORTABILITY=false
+  export VK_KHRONOS_PROFILES_EXCLUDE_DEVICE_EXTENSIONS=VK_KHR_dynamic_rendering,VK_KHR_synchronization2,VK_EXT_extended_dynamic_state,VK_EXT_extended_dynamic_state2,VK_EXT_extended_dynamic_state3,VK_KHR_dynamic_rendering_local_read
+  ```
+
+The core then logs `vk: device "..." api 1.2.0` and `compat: Vulkan below
+1.3, render passes, 1.0 barriers and submits`. Add
+`VK_LAYER_KHRONOS_validation` in front of the profiles layer, with
+synchronization validation on, to check the path. The layer only changes
+what the GPU reports: it doesn't reproduce another driver's bugs or speed.
 
 ### Is it FEX? The same game under KVM
 

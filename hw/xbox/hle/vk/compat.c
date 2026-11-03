@@ -514,7 +514,7 @@ void hle_compat_install(struct VolkDeviceTable *t)
         g_c.fbs = g_hash_table_new_full(fb_hash, fb_equal, g_free, NULL);
         g_c.init = true;
         if (!c->vk13 || !c->dyn_render || !c->sync2) {
-            hle_log("hakuX-hle-back", "compat: Vulkan %s, %s, %s", c->vk13 ? "1.3" : "1.1",
+            hle_log("hakuX-hle-back", "compat: Vulkan %s, %s, %s", c->vk13 ? "1.3" : "below 1.3",
                     c->dyn_render ? "dynamic rendering" : "render passes",
                     c->sync2 ? "synchronization2" : "1.0 barriers and submits");
         }

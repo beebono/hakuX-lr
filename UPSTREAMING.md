@@ -112,8 +112,9 @@ licence is GPL-3.0-or-later, as here.
 - **Android in the core build.** The CMake gate goes. The core then builds
   with the NDK, without SDL or JNI, on RetroArch's Vulkan device.
   - **No custom Turnip:** RetroArch owns the device, so adrenotools can't load
-    one. Phones on Qualcomm drivers older than Vulkan 1.3 can't run the core
-    (upstream's app recommends Turnip for them).
+    one. Phones on Qualcomm's Vulkan 1.2 drivers run the core on its
+    compatibility path, which can be slower (upstream's app recommends Turnip
+    for them).
   - **Guest RAM:** AHardwareBuffer sharing works in any app process.
 - **libretro's CI.**
   - A `.gitlab-ci.yml` with `linux-cmake-aarch64` and
@@ -129,7 +130,8 @@ licence is GPL-3.0-or-later, as here.
     database, playlists and thumbnails.
   - `core_options = "true"` with `core_options_version = "2.0"`: #14 left
     `"false"`.
-  - `notes` for ARM64 only, Vulkan 1.3, no BIOS or hard disk image.
+  - `notes` for ARM64 only, Vulkan 1.2 (1.3 recommended), no BIOS or hard
+    disk image.
   - Submitted to libretro-super.
 - **A docs page** in libretro's docs: requirements, options, the data folder,
   what's missing.

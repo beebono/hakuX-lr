@@ -1,0 +1,17 @@
+{
+    "$schema": "https://schema.khronos.org/vulkan/profiles-0.8-latest.json#",
+    "capabilities": {
+        "baseline": { "extensions": {}, "features": {}, "properties": {} }
+    },
+    "profiles": {
+        "VP_HAKUX_vk12": {
+            "version": 1,
+            "api-version": "1.2.0",
+            "label": "hakuX: Vulkan 1.2 device",
+            "description": "Report Vulkan 1.2 without changing device extensions or features; see TESTING.md.",
+            "contributors": {},
+            "history": [ { "revision": 1, "date": "2026-11-03", "author": "PortareOS", "comment": "Test Vulkan 1.2 compatibility" } ],
+            "capabilities": [ "baseline" ]
+        }
+    }
+}

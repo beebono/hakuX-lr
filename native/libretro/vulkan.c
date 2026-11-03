@@ -47,7 +47,9 @@ static const VkApplicationInfo *application_info(void)
         .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
         .pApplicationName = "hakuX",
         .pEngineName = "hakuX",
-        .apiVersion = VK_API_VERSION_1_3,       /* the renderer's floor */
+        /* RetroArch requires a 1.3 loader for this instance version.
+         * Vulkan 1.2 devices use vk/compat.c. */
+        .apiVersion = VK_API_VERSION_1_3,
     };
     return &app;
 }
