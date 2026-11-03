@@ -297,7 +297,7 @@ void nc_kstate_reset(void);
 void nc_ob_reset(void);
 /* Before nc_kernel_init: the boot is for a savestate whose process object is
  * at kprocess (0: none), and the kernel pool's first range goes where the
- * boot that made it put it, under that object (kernel.c POOL_BASE). */
+ * boot that made it put it, under that object (kernel.c POOL_BASE_BELOW_TOP). */
 void nc_kernel_pool_for(uint32_t kprocess);
 /* The process object's address in a savestate's kernel section (0: none, or
  * the state can't be read). */
