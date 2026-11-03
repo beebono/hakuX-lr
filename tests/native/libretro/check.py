@@ -364,7 +364,8 @@ def main():
         for network, marker in (
                 ('net=lan lanport=43075 lanbcast=127.0.0.1', 'lan: started'),
                 ('net=kai kai=127.0.0.1:43076', 'kai: started'),
-                (f'net=nat {NAT_TEST}', 'nat: UDP 43080 forwarded')):
+                (f'net=nat {NAT_TEST}', 'nat: DNS 46.101.64.175'),
+                (f'net=all lanport=43078 lanbcast=127.0.0.1 {NAT_TEST}', 'all: started')):
             cycles([args.harness, args.core, root / 'spin.iso', 30, root / 'saves'],
                    dict(os.environ, NC_NET=network), 5, marker)
         # a backend that fails to start (LAN's port taken, without
