@@ -58,6 +58,7 @@ enum { CONTINUE_EXECUTION, CONTINUE_SEARCH, NESTED_EXCEPTION, COLLIDED_UNWIND };
 
 #define CHAIN_END     0xFFFFFFFFu
 #define STATUS_UNWIND 0xC0000027u
+#define STATUS_ACCESS_VIOLATION 0xC0000005u
 #define CXX_EXCEPTION 0xE06D7363u /* MSVC's throw */
 
 /* A level's guest frame, from its base up:
@@ -203,9 +204,15 @@ static NcSeh *push_level(NcKernel *k, NcFrame *f, NcThread *t, uint32_t esp)
 static void unhandled(NcKernel *k, NcFrame *f, NcSeh *l, const char *why)
 {
     char type[96];
-    nc_kernel_request_stop(k, f, "seh: unhandled exception %08x at %08x (%s)%s%s", rd(k, l->rec + ER_CODE),
-                           rd(k, l->rec + ER_ADDRESS), why, rd(k, l->rec + ER_CODE) == CXX_EXCEPTION ? ", C++ " : "",
-                           rd(k, l->rec + ER_CODE) == CXX_EXCEPTION ? cxx_type(k, l->rec, type, sizeof(type)) : "");
+    const uint32_t code = rd(k, l->rec + ER_CODE);
+    if (code == STATUS_ACCESS_VIOLATION) {
+        snprintf(type, sizeof(type), "%s %08x", rd(k, l->rec + ER_INFO) ? "writing" : "reading",
+                 rd(k, l->rec + ER_INFO + 4));
+    }
+    nc_kernel_request_stop(k, f, "seh: unhandled exception %08x at %08x (%s)%s%s", code, rd(k, l->rec + ER_ADDRESS),
+                           why, code == CXX_EXCEPTION ? ", C++ " : code == STATUS_ACCESS_VIOLATION ? ", " : "",
+                           code == CXX_EXCEPTION ? cxx_type(k, l->rec, type, sizeof(type)) :
+                           code == STATUS_ACCESS_VIOLATION ? type : "");
 }
 
 /* Calls the handler of the level's registration, or ends the level. */
@@ -298,8 +305,6 @@ static uint64_t RtlRaiseException(NcKernel *k, NcFrame *f, const uint32_t *a)
  * Returns false if there is no current thread, the thread has no SEH
  * handler, there is no mapped stack below ESP to run the dispatch on, or the
  * dispatch can't be set up. The caller then reports the fault as a crash. */
-#define STATUS_ACCESS_VIOLATION 0xC0000005u
-
 bool nc_seh_access_violation(NcKernel *k, NcFrame *f, uint32_t va, bool write)
 {
     NcThread *t = k->current;
@@ -328,8 +333,11 @@ bool nc_seh_access_violation(NcKernel *k, NcFrame *f, uint32_t va, bool write)
         nc_log("hakuX-native", "seh: t%u access violation at %08x, %s %08x: to the title's handlers", t->id, eip,
                write ? "writing" : "reading", va);
     }
+    /* a chain step() refuses at once (a registration outside the stack):
+     * the fault's own report, with the registers */
+    const bool stopping = k->stop;
     step(k, f, t);
-    return true;
+    return stopping || !k->stop;
 }
 
 /* RtlUnwind(TargetFrame, TargetIp, ExceptionRecord, ReturnValue): calls the
