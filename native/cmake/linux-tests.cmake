@@ -44,6 +44,11 @@ target_link_libraries(apu-resample-smoke PRIVATE hakux_native m)
 target_link_options(apu-resample-smoke PRIVATE -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc)
 add_test(NAME apu-resample-smoke COMMAND apu-resample-smoke)
 set_tests_properties(apu-resample-smoke PROPERTIES TIMEOUT 60)
+# The APU's ADPCM block decoder: reserved header bytes, step indexes past the table.
+add_executable(apu-adpcm-test "${NC_REPO}/tests/native/apu/adpcm_test.c")
+target_include_directories(apu-adpcm-test PRIVATE "${NC_REPO}")
+add_test(NAME apu-adpcm-test COMMAND apu-adpcm-test)
+set_tests_properties(apu-adpcm-test PROPERTIES TIMEOUT 10)
 # Exercise NAT with console frames and a fake UPnP router.
 add_executable(nat-smoke "${NC_REPO}/tests/native/linux/nat.c")
 target_link_libraries(nat-smoke PRIVATE hakux_native Threads::Threads)
