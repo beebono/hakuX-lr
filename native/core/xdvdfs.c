@@ -104,27 +104,82 @@ static bool name_eq(const uint8_t *a, size_t alen, const char *b, size_t blen)
     return true;
 }
 
-/* Depth-first over the whole tree: robust against any ordering differences. */
-static bool dir_search(const uint8_t *dir, uint32_t size, uint32_t off, const char *name,
-                       size_t namelen, NcDiscFile *out, unsigned depth)
+bool nc_xdvdfs_walk(const uint8_t *dir, uint32_t size, NcXdvdfsEntryFn fn, void *ctx)
 {
-    if (off + 14 > size || depth > 64) {
-        return false;
+    /* Entries start at multiples of 4: one bit each marks an entry seen. */
+    uint8_t *seen = calloc(size / 32 + 1, 1);
+    uint32_t *stack = NULL, n = 0, cap = 0, off = 0;
+    bool ok = seen != NULL, more = true, down = true;
+    while (ok && more) {
+        /* Push the entry and its left children. Stop at a seen one. */
+        while (down) {
+            down = false;
+            if (off + 14 > size || (seen[off / 32] >> (off / 4 % 8) & 1)) {
+                break;
+            }
+            const uint8_t *e = dir + off;
+            const uint16_t left = nc_rd16(e), right = nc_rd16(e + 2);
+            if (left == 0xFFFF && right == 0xFFFF && e[12] == 0xFF) {
+                break; /* padding */
+            }
+            seen[off / 32] |= (uint8_t)(1u << (off / 4 % 8));
+            if (n == cap) {
+                uint32_t *grown = realloc(stack, (cap ? cap * 2 : 64) * sizeof(*stack));
+                if (!grown) {
+                    ok = false;
+                    break;
+                }
+                stack = grown;
+                cap = cap ? cap * 2 : 64;
+            }
+            stack[n++] = off;
+            if (left && left != 0xFFFF) {
+                off = left * 4u;
+                down = true;
+            }
+        }
+        if (!ok || !n) {
+            break;
+        }
+        off = stack[--n];
+        const uint8_t *e = dir + off;
+        if (off + 14 + e[13] <= size) {
+            more = fn(ctx, e, off);
+        }
+        const uint16_t right = nc_rd16(e + 2);
+        down = right && right != 0xFFFF;
+        off = right * 4u;
     }
-    const uint8_t *e = dir + off;
-    uint16_t left = nc_rd16(e), right = nc_rd16(e + 2);
-    if (left == 0xFFFF && right == 0xFFFF && e[12] == 0xFF) {
-        return false; /* padding */
-    }
-    uint8_t nlen = e[13];
-    if (off + 14 + nlen <= size && name_eq(e + 14, nlen, name, namelen)) {
-        out->sector = nc_rd32(e + 4);
-        out->size = nc_rd32(e + 8);
-        out->attr = e[12];
+    free(stack);
+    free(seen);
+    return ok;
+}
+
+typedef struct DirFind {
+    const char *name;
+    size_t len;
+    NcDiscFile *out;
+    bool found;
+} DirFind;
+
+static bool find_entry(void *ctx, const uint8_t *e, uint32_t off)
+{
+    DirFind *f = ctx;
+    (void)off;
+    if (!name_eq(e + 14, e[13], f->name, f->len)) {
         return true;
     }
-    return (left && left != 0xFFFF && dir_search(dir, size, left * 4u, name, namelen, out, depth + 1)) ||
-           (right && right != 0xFFFF && dir_search(dir, size, right * 4u, name, namelen, out, depth + 1));
+    f->out->sector = nc_rd32(e + 4);
+    f->out->size = nc_rd32(e + 8);
+    f->out->attr = e[12];
+    f->found = true;
+    return false;
+}
+
+static bool dir_search(const uint8_t *dir, uint32_t size, const char *name, size_t namelen, NcDiscFile *out)
+{
+    DirFind f = {name, namelen, out, false};
+    return nc_xdvdfs_walk(dir, size, find_entry, &f) && f.found;
 }
 
 /* the disc's own files */
@@ -151,7 +206,7 @@ static bool disc_find(const NcDisc *d, const char *path, NcDiscFile *out)
             return false;
         }
         bool ok = image_read(d, dir, cur.size, d->part_off + (uint64_t)cur.sector * NC_XDVDFS_SECTOR) &&
-                  dir_search(dir, cur.size, 0, p, (size_t)(end - p), &cur, 0);
+                  dir_search(dir, cur.size, p, (size_t)(end - p), &cur);
         free(dir);
         if (!ok) {
             return false;

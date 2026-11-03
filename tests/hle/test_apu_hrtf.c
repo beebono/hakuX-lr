@@ -3,7 +3,7 @@
  * rounding, over random audio with the parameters moving (new targets every
  * few frames, delays from 0 to the 42-sample limit, fractional and whole)
  * and settled. Built for the host and, with the NDK, for the device (its
- * NEON path). */
+ * NEON path); on x86-64 at each vector level the host has. */
 #include "hle_test.h"
 
 #include <math.h>
@@ -386,8 +386,9 @@ static void test_coefficients_by_ear(void)
     expect(y[1], w1);
 }
 
-int main(void)
+static void run_suite(void)
 {
+    g_max_err = 0;
     HT_RUN(test_history_new_voice);
     HT_RUN(test_history_every_position);
     HT_RUN(test_history_keeps_moving_parameters);
@@ -402,5 +403,19 @@ int main(void)
     run(3000, 1, moving + 5, 1, true);      /* ... next to the delay limit */
     fprintf(stderr, "hrtf: max |difference| %.3g\n", g_max_err);
     HT_CHECK(g_max_err < 2e-6);
+}
+
+int main(void)
+{
+#if defined(__x86_64__)
+    /* each vector level the host has (vp/simd.h) */
+    for (int level = vp_simd_set(VP_SIMD_AVX2); level >= VP_SIMD_SCALAR; level--) {
+        vp_simd_set(level);
+        fprintf(stderr, "hrtf: %s\n", vp_simd_name(level));
+        run_suite();
+    }
+#else
+    run_suite();
+#endif
     return ht_failures != 0;
 }

@@ -86,7 +86,7 @@ static struct retro_core_option_v2_definition g_defs[OPT_COUNT + 1] = {
     [OPT_RESAMPLER] = {
         "hakux_audio_resampler", "Audio Resampler", NULL,
         "Converts game audio to 48 kHz. Sinc preserves high frequencies and reduces aliasing. "
-        "Linear uses less CPU but softens high frequencies. Non-ARM64 builds use Linear." NEXT,
+        "Linear uses less CPU but softens high frequencies." NEXT,
         NULL, NULL,
         {{"sinc", "Sinc (higher quality)"}, {"linear", "Linear"}, {NULL, NULL}},
         "sinc"},

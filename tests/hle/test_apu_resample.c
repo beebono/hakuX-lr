@@ -1,6 +1,7 @@
 /* Copyright (C) 2026-present PortareOS */
 /* The voices' resamplers (native/dev/apu/vp/resample.h) measured: linear,
- * and band-limited sinc (resample_sinc.c) where the host is AArch64. Their
+ * and band-limited sinc (resample_sinc.c; AArch64 and x86-64, there at each
+ * vector level the host has). Their
  * input comes from a callback 32 stereo frames at a time, as the VP feeds
  * them. Levels are least-squares sine fits over a window after the start
  * (no FFT leakage, no startup transient); the sinc converter is held to
@@ -16,6 +17,7 @@
 #include <time.h>
 
 #include "native/dev/apu/vp/resample.h"
+#include "native/dev/apu/vp/simd.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -479,16 +481,41 @@ static void bench(void)
     }
 }
 
-int main(int argc, char **argv)
+#if defined(__x86_64__)
+/* The levels' sinc against each other (vp/simd.h): AVX2 + FMA, SSE2 and
+ * scalar code round differently, within a 16-bit sample's 1/4 */
+static void test_levels_agree(void)
 {
-    g_qualities = vp_resample_sinc_available() ? 2 : 1;
-    if (argc > 1 && !strcmp(argv[1], "bench")) {
-        bench();
-        return 0;
+    static const double ratios[] = {48000.0 / 22050, 48000.0 / 32000, 1.0, 48000.0 / 64000, 48000.0 / 96000,
+                                    48000.0 / 192000, 48000.0 / 1e6};
+    const int top = vp_simd_set(VP_SIMD_AVX2);
+    for (size_t k = 0; k < sizeof(ratios) / sizeof(ratios[0]); k++) {
+        float *y[3] = {NULL};
+        for (int level = VP_SIMD_SCALAR; level <= top; level++) {
+            vp_simd_set(level);
+            Signal s = tone(48000 / ratios[k], 997, 0.5, 3001, 0.7);
+            y[level] = convert(VP_RESAMPLE_SINC, &s, ratios[k], 4096);
+        }
+        fprintf(stderr, "  sinc at %.4f:", ratios[k]);
+        for (int level = VP_SIMD_SCALAR; level < top; level++) {
+            double e = 0;
+            for (long i = 0; i < 2 * 4096; i++) {
+                e = fmax(e, fabs((double)y[level][i] - y[top][i]));
+            }
+            fprintf(stderr, " %s %.3g", vp_simd_name(level), e);
+            HT_CHECK(e < 0.25 / 32768);
+        }
+        fprintf(stderr, " off %s\n", vp_simd_name(top));
+        for (int level = VP_SIMD_SCALAR; level <= top; level++) {
+            free(y[level]);
+        }
     }
-    if (g_qualities == 1) {
-        fprintf(stderr, "  sinc not in this build (not AArch64): linear only\n");
-    }
+    vp_simd_set(top);
+}
+#endif
+
+static void run_suite(void)
+{
     HT_RUN(test_passband_22k);
     HT_RUN(test_alias_96k);
     HT_RUN(test_downsample_passband);
@@ -501,5 +528,36 @@ int main(int argc, char **argv)
     HT_RUN(test_extremes);
     HT_RUN(test_rate);
     HT_RUN(test_reuse);
+}
+
+int main(int argc, char **argv)
+{
+    g_qualities = vp_resample_sinc_available() ? 2 : 1;
+#if defined(__x86_64__)
+    /* each vector level the host has (vp/simd.h), highest first */
+    for (int level = vp_simd_set(VP_SIMD_AVX2); level >= VP_SIMD_SCALAR; level--) {
+        vp_simd_set(level);
+        fprintf(stderr, "  vector paths: %s\n", vp_simd_name(level));
+        if (argc > 1 && !strcmp(argv[1], "bench")) {
+            bench();
+        } else {
+            run_suite();
+        }
+    }
+    vp_simd_set(VP_SIMD_AVX2);
+    if (argc > 1 && !strcmp(argv[1], "bench")) {
+        return 0;
+    }
+    HT_RUN(test_levels_agree);
+#else
+    if (argc > 1 && !strcmp(argv[1], "bench")) {
+        bench();
+        return 0;
+    }
+    if (g_qualities == 1) {
+        fprintf(stderr, "  sinc not in this build: linear only\n");
+    }
+    run_suite();
+#endif
     HT_DONE();
 }

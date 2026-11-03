@@ -18,7 +18,7 @@
  */
 /* hakuX native core: the same filter (31-tap HRIR convolution per channel,
  * an interaural delay with linear interpolation, parameters smoothed per
- * sample), laid out for NEON. The delay line holds its samples twice, so
+ * sample), laid out for NEON (and SSE2, AVX2 + FMA on x86-64). The delay line holds its samples twice, so
  * any delay's window is contiguous; the coefficients are stored reversed
  * and padded to 32 with a zero tap, so the convolution is a dot product of
  * two contiguous arrays. Its sums are associated differently from the
@@ -34,6 +34,8 @@
 
 #if defined(__aarch64__)
 #include <arm_neon.h>
+#elif defined(__x86_64__)
+#include "simd.h"
 #endif
 
 #include "native/dev/apu/apu_regs.h"
@@ -122,6 +124,57 @@ static inline bool hrtf_filter_settled(const HrtfFilter *f)
     return true;
 }
 
+#if defined(__x86_64__)
+/* hrtf_dot's NEON sums in SSE2: its lanes and their order, each fused
+ * multiply-add a multiply and an add */
+static inline float hrtf_dot_sse2(float *c, const float *tar, const float *w, float dfrac)
+{
+    const bool interp = dfrac > 0.0f;
+    const __m128 alpha = _mm_set1_ps(HRTF_PARAM_SMOOTH_ALPHA), vf = _mm_set1_ps(dfrac), v0 = _mm_set1_ps(1 - dfrac);
+    __m128 a0 = _mm_setzero_ps(), a1 = a0;
+    for (int m = 0; m < HRTF_TAPS_PADDED; m += 8) {
+        __m128 c0 = _mm_loadu_ps(c + m), c1 = _mm_loadu_ps(c + m + 4);
+        if (tar) {
+            c0 = _mm_add_ps(c0, _mm_mul_ps(_mm_sub_ps(_mm_loadu_ps(tar + m), c0), alpha));
+            c1 = _mm_add_ps(c1, _mm_mul_ps(_mm_sub_ps(_mm_loadu_ps(tar + m + 4), c1), alpha));
+            _mm_storeu_ps(c + m, c0);
+            _mm_storeu_ps(c + m + 4, c1);
+        }
+        __m128 s0 = _mm_loadu_ps(w + m), s1 = _mm_loadu_ps(w + m + 4);
+        if (interp) {
+            s0 = _mm_add_ps(_mm_mul_ps(_mm_loadu_ps(w + m - 1), vf), _mm_mul_ps(s0, v0));
+            s1 = _mm_add_ps(_mm_mul_ps(_mm_loadu_ps(w + m + 3), vf), _mm_mul_ps(s1, v0));
+        }
+        a0 = _mm_add_ps(a0, _mm_mul_ps(c0, s0));
+        a1 = _mm_add_ps(a1, _mm_mul_ps(c1, s1));
+    }
+    return vp_sse_sum(_mm_add_ps(a0, a1));
+}
+
+/* hrtf_dot's NEON sums in AVX2 + FMA, bit for bit: lanes 0-3 its a0, 4-7 a1 */
+static inline __attribute__((always_inline)) VP_AVX2 float
+hrtf_dot_avx2(float *c, const float *tar, const float *w, float dfrac)
+{
+    const bool interp = dfrac > 0.0f;
+    const __m256 alpha = _mm256_set1_ps(HRTF_PARAM_SMOOTH_ALPHA), vf = _mm256_set1_ps(dfrac);
+    const __m256 v0 = _mm256_set1_ps(1 - dfrac);
+    __m256 a = _mm256_setzero_ps();
+    for (int m = 0; m < HRTF_TAPS_PADDED; m += 8) {
+        __m256 cv = _mm256_loadu_ps(c + m);
+        if (tar) {
+            cv = _mm256_fmadd_ps(_mm256_sub_ps(_mm256_loadu_ps(tar + m), cv), alpha, cv);
+            _mm256_storeu_ps(c + m, cv);
+        }
+        __m256 sv = _mm256_loadu_ps(w + m);
+        if (interp) {
+            sv = _mm256_fmadd_ps(sv, v0, _mm256_mul_ps(_mm256_loadu_ps(w + m - 1), vf));
+        }
+        a = _mm256_fmadd_ps(cv, sv, a);
+    }
+    return vp_avx_sum(a);
+}
+#endif
+
 /* sum of c[m] * w[m] over the padded taps. With tar, each c[m] is first
  * smoothed one step toward tar[m] (the per-sample parameter step) and
  * stored; with dfrac, each w[m] is first interpolated toward w[m - 1] (the
@@ -165,9 +218,11 @@ static inline float hrtf_dot(float *c, const float *tar, const float *w, float d
 #endif
 }
 
-static inline void hrtf_filter_process(HrtfFilter *f,
-                                       float in[HRTF_SAMPLES_PER_FRAME][2],
-                                       float out[HRTF_SAMPLES_PER_FRAME][2])
+typedef float (*HrtfDot)(float *c, const float *tar, const float *w, float dfrac);
+
+static inline __attribute__((always_inline)) void
+hrtf_filter_run(HrtfFilter *f, float in[HRTF_SAMPLES_PER_FRAME][2], float out[HRTF_SAMPLES_PER_FRAME][2],
+                HrtfDot dot)
 {
     /* the parameters step once per sample (the coefficients in hrtf_dot) */
     const bool settled = hrtf_filter_settled(f);
@@ -195,11 +250,38 @@ static inline void hrtf_filter_process(HrtfFilter *f,
             // HRIR Convolution: tap k reads the sample di + k back,
             // buf[pos + HRTF_BUFLEN - di - k]; reversed, from tap 30 up
             const float *w = &buf[pos + HRTF_BUFLEN - di - (HRTF_NUM_TAPS - 1)];
-            out[n][ch] = hrtf_dot(f->ch[ch].hrir_coeff_cur, settled ? NULL : f->ch[ch].hrir_coeff_tar, w, dfrac);
+            out[n][ch] = dot(f->ch[ch].hrir_coeff_cur, settled ? NULL : f->ch[ch].hrir_coeff_tar, w, dfrac);
         }
 
         f->buf_pos = (pos + 1) % HRTF_BUFLEN;
     }
+}
+
+#if defined(__x86_64__)
+static inline VP_AVX2 void hrtf_filter_process_avx2(HrtfFilter *f, float in[HRTF_SAMPLES_PER_FRAME][2],
+                                                    float out[HRTF_SAMPLES_PER_FRAME][2])
+{
+    hrtf_filter_run(f, in, out, hrtf_dot_avx2);
+}
+#endif
+
+/* NEON on AArch64; on x86-64 AVX2 + FMA, SSE2 or scalar (simd.h) */
+static inline void hrtf_filter_process(HrtfFilter *f,
+                                       float in[HRTF_SAMPLES_PER_FRAME][2],
+                                       float out[HRTF_SAMPLES_PER_FRAME][2])
+{
+#if defined(__x86_64__)
+    const int level = vp_simd_level();
+    if (level == VP_SIMD_AVX2) {
+        hrtf_filter_process_avx2(f, in, out);
+    } else if (level == VP_SIMD_SSE2) {
+        hrtf_filter_run(f, in, out, hrtf_dot_sse2);
+    } else {
+        hrtf_filter_run(f, in, out, hrtf_dot);
+    }
+#else
+    hrtf_filter_run(f, in, out, hrtf_dot);
+#endif
 }
 
 #endif

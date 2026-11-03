@@ -84,12 +84,15 @@ function(audio_test name)
   endif()
   add_test(NAME ${name} COMMAND ${name})
 endfunction()
-audio_test(test_apu_hrtf)
+audio_test(test_apu_hrtf ${REPO_ROOT}/native/dev/apu/vp/simd.c)
 audio_test(test_apu_stereo)
 audio_test(test_lr_audio ${REPO_ROOT}/native/libretro/audio.c)
-# The voices' resamplers: linear, and sinc where the host is AArch64
+# The voices' resamplers, linear and sinc, at each vector level the host has
 audio_test(test_apu_resample ${REPO_ROOT}/native/dev/apu/vp/resample.c
-           ${REPO_ROOT}/native/dev/apu/vp/resample_sinc.c)
+           ${REPO_ROOT}/native/dev/apu/vp/resample_sinc.c ${REPO_ROOT}/native/dev/apu/vp/simd.c)
+# The VP's vector paths against scalar models of their arithmetic
+audio_test(test_apu_simd ${REPO_ROOT}/native/dev/apu/vp/resample.c
+           ${REPO_ROOT}/native/dev/apu/vp/resample_sinc.c ${REPO_ROOT}/native/dev/apu/vp/simd.c)
 
 # The shader generators live in the local tools/ (not versioned).
 if(EXISTS ${REPO_ROOT}/tools/hle/scan/hle_vshgen.c)

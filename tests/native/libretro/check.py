@@ -466,9 +466,11 @@ def main():
             ('title returned to the firmware (routine 2', 'the core asked to shut down'))
         print("PASS: the dashboard booted with no content, through its relaunches")
         # The audio resampler option reaches the APU before it starts: sinc by
-        # default, linear when chosen
-        run([args.harness, args.core, root / 'spin.iso', 30, root / 'saves'], 0,
-            ('resampler sinc', 'resampler: sinc (32-tap Kaiser-windowed, NEON)', 'ran 30 frames'))
+        # default (NEON on ARM64; on x86-64 AVX2+FMA or SSE2, the CPU's),
+        # linear when chosen
+        sinc = 'resampler: sinc (32-tap Kaiser-windowed, ' + ('NEON)' if os.uname().machine == 'aarch64' else '')
+        run_without([args.harness, args.core, root / 'spin.iso', 30, root / 'saves'],
+                    ('resampler sinc', sinc, 'ran 30 frames'), ('not in this build',))
         run([args.harness, args.core, root / 'spin.iso', 30, root / 'saves'], 0,
             ('resampler linear', 'resampler: linear', 'ran 30 frames'),
             dict(os.environ, HARNESS_OPTIONS='hakux_audio_resampler=linear'))

@@ -1,8 +1,9 @@
 # Copyright (C) 2026-present PortareOS
-# The pinned dsp56300 C FFI, compiled for the same AArch64 Linux host.
+# The pinned dsp56300 C FFI, compiled for the same Linux host (AArch64 or
+# x86-64: Cranelift emits code for either, its ISA features the host's).
 if(ANDROID OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR
-   NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
-  message(FATAL_ERROR "HAKUX_DSP_JIT requires AArch64 Linux; disable it for Android")
+   NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|x86_64|AMD64)$")
+  message(FATAL_ERROR "HAKUX_DSP_JIT requires AArch64 or x86-64 Linux; disable it for Android")
 endif()
 
 find_program(NC_CARGO cargo REQUIRED)

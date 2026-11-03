@@ -4,12 +4,32 @@
 
 ### What's new
 
+- **Full DSP on AMD64** — The DSP56300 JIT now runs on x86-64 Linux as
+  well, so AMD64 defaults to **Full DSP (experimental)** like ARM64 and plays
+  the game's Xbox reverb and other effects. Choose **Fast** if audio
+  crackles or a game runs slowly.
+- **Sinc resampling and 3D audio with AVX2 on AMD64** — The 32-tap sinc
+  resampler, now the default on AMD64 as well, and the 3D audio (HRTF)
+  filter use AVX2 and FMA on CPUs that have them (Intel Haswell, AMD Zen and
+  newer), producing the same samples as ARM64's NEON, and SSE2 on older
+  CPUs. The voice mix and the output conversion use the same instructions.
 - **Frame Pacing (experimental)** — A core option from rfandango/hakuX#14,
   off by default. When a game's rendering falls behind its simulation,
   **On** holds the game to the render pace so unrendered frames don't queue
   up as input lag; **Lowest Latency** waits one frame less. It switches
   during play. Each second a game draws, the renderer logs a `frame pace`
   line for measuring it, pacing on or off.
+
+### Testing
+
+- x86-64 CI builds the DSP JIT with the image's Rust toolchain and runs its
+  checks; the audio unit tests run at each vector level the runner's CPU
+  has and compare the AVX2 paths with scalar models of NEON's arithmetic.
+
+In Burnout 3 on a Ryzen 7 9800X3D (headless, 20 seconds from 20 s in), the
+audio thread used about 14% of one CPU core with Full DSP (29% with the C
+interpreter, 1% with Fast). Full DSP and sinc resampling on AMD64 still
+need in-game listening tests.
 
 ## linux-v0.17.4 (Linux, aarch64 and x86-64)
 

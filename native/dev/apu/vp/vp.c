@@ -489,6 +489,8 @@ static bool voice_spin_lock(MCPXAPUState *d, uint16_t v, bool may_retry)
         for (unsigned i = 1;; i++) {
 #if defined(__aarch64__)
             __asm__ __volatile__("yield" ::: "memory");
+#elif defined(__x86_64__)
+            __builtin_ia32_pause();
 #endif
             if (!__atomic_load_n(&d->vp.voice_spinlocks[v].v, __ATOMIC_RELAXED) &&
                 apu_spin_trylock(&d->vp.voice_spinlocks[v])) {
@@ -1408,7 +1410,11 @@ static int voice_get_samples(MCPXAPUState *d, uint8_t *c, uint32_t v,
                 segment_length = apu_ram_ld32(addr + 4);
             }
         }
-        assert(segment_offset != 0);
+        /* The guest may not have filled this SSL entry yet. Retry next cycle
+         * without advancing the stream. */
+        if (!APU_CHECK(segment_offset != 0)) {
+            return -1;
+        }
         assert(segment_length != 0);
         seg_len = (segment_length >> 0) & 0xffff;
         seg_cs = (segment_length >> 16) & 3;
@@ -1416,7 +1422,11 @@ static int voice_get_samples(MCPXAPUState *d, uint8_t *c, uint32_t v,
         seg_s = (segment_length >> 23) & 1;
         assert(seg_cs == container_size_index);
         assert((seg_spb + 1) == samples_per_block);
-        assert(seg_s == stereo);
+        /* Keep the voice's channel layout when the segment disagrees. */
+        if (seg_s != stereo) {
+            DPRINTF("Voice %d: segment stereo=%d, voice stereo=%d\n", v, seg_s, stereo);
+            seg_s = stereo;
+        }
         container_size_index = seg_cs;
         if (seg_cs == NV_PAVS_VOICE_CFG_FMT_CONTAINER_SIZE_ADPCM) {
             sample_size = NV_PAVS_VOICE_CFG_FMT_SAMPLE_SIZE_S24;
@@ -2013,7 +2023,7 @@ static void voice_process(MCPXAPUState *d, uint8_t *c,
 
     /* Deinterleave samples[32][2] into per-channel contiguous buffers once
      * (amortized across 8 subsequent mix_one_bin calls). mix_one_bin
-     * (NEON-accelerated on aarch64) reads contiguous float[32]. */
+     * (NEON on aarch64, SSE2/AVX2 on x86-64) reads contiguous float[32]. */
     float channel_buf[2][NUM_SAMPLES_PER_FRAME];
     for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
         channel_buf[0][i] = samples[i][0];
@@ -2298,6 +2308,8 @@ static VoiceTake voice_take(MCPXAPUState *d, uint8_t *c, uint16_t v)
                 } else if (us < HELD_SPIN_US) {
 #if defined(__aarch64__)
                     __asm__ __volatile__("yield" ::: "memory");
+#elif defined(__x86_64__)
+                    __builtin_ia32_pause();
 #endif
                 } else {
                     usleep(HELD_NAP_US);
@@ -2691,6 +2703,10 @@ void mcpx_apu_vp_init(MCPXAPUState *d)
     d->vp.voice_cache = NULL;
     d->vp.ssl_cache = NULL;
 
+#if defined(__x86_64__)
+    /* the vector paths (simd.h): the CPU's again, NC_APU_SIMD's cap */
+    nc_log("hakuX-apu", "vector paths: %s", vp_simd_name(vp_simd_init()));
+#endif
     /* The voices' resampler quality: the content's (g_apu_config.resampler),
      * for the session; each voice's is made at its first VOICE_ON
      * (voice_reset_filters) */

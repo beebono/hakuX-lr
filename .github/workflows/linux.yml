@@ -68,8 +68,9 @@ jobs:
             build/package/hakux-${{ steps.version.outputs.version }}-aarch64.tar.gz.sha256
           if-no-files-found: error
 
-  # x86-64 Linux (#56): the core with the KVM backend and its tests, in the
-  # same image built for amd64 (tools/native/linux-ci-x86_64.sh).
+  # x86-64 Linux (#56): the core with the KVM backend and the DSP JIT and
+  # its tests, in the same image built for amd64
+  # (tools/native/linux-ci-x86_64.sh).
   build-x86_64:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-24.04

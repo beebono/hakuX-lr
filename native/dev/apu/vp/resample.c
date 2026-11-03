@@ -4,6 +4,10 @@
 
 #if defined(__aarch64__)
 #include <arm_neon.h>
+#define LINEAR_STEREO_SIMD 1
+#elif defined(__x86_64__)
+#include "simd.h"
+#define LINEAR_STEREO_SIMD (vp_simd_level() >= VP_SIMD_SSE2)
 #endif
 
 #include "resample.h"
@@ -15,9 +19,9 @@
  * Per-refill malloc/memcpy/free was the bulk of the cost in profiling
  * (PGR2 race, 2026-06-01 ~3.4% host CPU). Replace with a fixed inline
  * buffer + memmove-compact on refill. The lerp inner loop gets a NEON
- * 2-channel specialization; ch=2 is the only used case (vp.c:1255
- * hardcodes channels=2). Scalar fallback preserved for other channel
- * counts and non-AArch64 builds.
+ * (SSE2 on x86-64) 2-channel specialization; ch=2 is the only used case
+ * (vp.c:1255 hardcodes channels=2). Scalar fallback preserved for other
+ * channel counts and other builds.
  *
  * Buffer sizing: the only producer is voice_resample_callback which
  * returns at most NUM_SAMPLES_PER_FRAME=32 frames per call. Worst-case
@@ -132,9 +136,10 @@ static long linear_read(VpResampler *state, double ratio, long frames, float *da
     float step = (float)(1.0 / ratio);
     long out_frames = 0;
 
-#if defined(__aarch64__)
-    if (ch == 2) {
-        /* Fast path: 2-channel NEON lerp. One float32x2_t FMA per
+#ifdef LINEAR_STEREO_SIMD
+    if (ch == 2 && LINEAR_STEREO_SIMD) {
+        /* Fast path: 2-channel NEON lerp (SSE2: a multiply and an add, as
+         * the x86-64 scalar form, bit for bit). One float32x2_t FMA per
          * output frame. Bit-identical to the scalar form
          *   out[c] = s0[c] + frac * (s1[c] - s0[c])
          * because vfma_n_f32(a, b, n) computes a + b*n with a single
@@ -177,11 +182,18 @@ static long linear_read(VpResampler *state, double ratio, long frames, float *da
 
             float frac = pos - (float)idx0;
             const float *base = state->input_buf;
+#if defined(__aarch64__)
             float32x2_t s0 = vld1_f32(base + idx0 * 2);
             float32x2_t s1 = vld1_f32(base + idx1 * 2);
             float32x2_t d  = vsub_f32(s1, s0);
             float32x2_t r  = vfma_n_f32(s0, d, frac);
             vst1_f32(data + out_frames * 2, r);
+#else
+            const __m128 s0 = _mm_castpd_ps(_mm_load_sd((const double *)(base + idx0 * 2)));
+            const __m128 s1 = _mm_castpd_ps(_mm_load_sd((const double *)(base + idx1 * 2)));
+            const __m128 r = _mm_add_ps(s0, _mm_mul_ps(_mm_set1_ps(frac), _mm_sub_ps(s1, s0)));
+            _mm_store_sd((double *)(data + out_frames * 2), _mm_castps_pd(r));
+#endif
 
             out_frames++;
             pos += step;
@@ -191,7 +203,7 @@ static long linear_read(VpResampler *state, double ratio, long frames, float *da
     }
 #endif
 
-    /* Scalar fallback: any channel count, non-AArch64. */
+    /* Scalar fallback: any channel count, other builds. */
     while (out_frames < frames) {
         int need = (int)state->input_pos + 1;
         if (need >= state->input_len) {
@@ -244,7 +256,17 @@ bool vp_resample_sinc_available(void)
 
 const char *vp_resample_name(int quality)
 {
-    return quality == VP_RESAMPLE_SINC ? "sinc (32-tap Kaiser-windowed, NEON)" : "linear";
+    if (quality != VP_RESAMPLE_SINC) {
+        return "linear";
+    }
+#if defined(__x86_64__)
+    static const char *const names[] = {"sinc (32-tap Kaiser-windowed, scalar)",
+                                        "sinc (32-tap Kaiser-windowed, SSE2)",
+                                        "sinc (32-tap Kaiser-windowed, AVX2+FMA)"};
+    return names[vp_simd_level()];
+#else
+    return "sinc (32-tap Kaiser-windowed, NEON)";
+#endif
 }
 
 VpResampler *vp_resample_new(vp_resample_cb cb, int quality, int channels, void *cb_data)
@@ -356,6 +378,30 @@ void vp_float_to_short_array(const float *in, short *out, int len)
         if (v > 1.0f) v = 1.0f;
         else if (v < -1.0f) v = -1.0f;
         out[i] = (short)(v * 32767.0f);
+    }
+#elif defined(__x86_64__)
+    /* SSE2, as NEON's (and the scalar form's): clipped, scaled, truncated;
+     * a NaN 0 */
+    int i = 0;
+    if (vp_simd_level() >= VP_SIMD_SSE2) {
+        const __m128 scale = _mm_set1_ps(32767.0f), hi = _mm_set1_ps(1.0f), lo = _mm_set1_ps(-1.0f);
+        for (; i + 8 <= len; i += 8) {
+            __m128 a = _mm_loadu_ps(&in[i]), b = _mm_loadu_ps(&in[i + 4]);
+            a = _mm_and_ps(a, _mm_cmpord_ps(a, a));
+            b = _mm_and_ps(b, _mm_cmpord_ps(b, b));
+            a = _mm_mul_ps(_mm_min_ps(_mm_max_ps(a, lo), hi), scale);
+            b = _mm_mul_ps(_mm_min_ps(_mm_max_ps(b, lo), hi), scale);
+            _mm_storeu_si128((__m128i *)&out[i], _mm_packs_epi32(_mm_cvttps_epi32(a), _mm_cvttps_epi32(b)));
+        }
+    }
+    for (; i < len; ++i) {
+        float v = in[i];
+        if (v > 1.0f) {
+            v = 1.0f;
+        } else if (v < -1.0f) {
+            v = -1.0f;
+        }
+        out[i] = v == v ? (short)(v * 32767.0f) : 0;
     }
 #else
     for (int i = 0; i < len; ++i) {

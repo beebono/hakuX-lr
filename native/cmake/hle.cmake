@@ -113,11 +113,13 @@ add_library(hakux_apu STATIC
   ${NC_APU}/dsp/gp_probe.c
   ${NC_APU}/vp/resample.c
   ${NC_APU}/vp/resample_sinc.c
+  ${NC_APU}/vp/simd.c
   ${NC_APU}/vp/vp.c
 )
+# The DSP56300 JIT (Cranelift) on Linux, AArch64 and x86-64 alike.
 set(NC_DSP_JIT_DEFAULT OFF)
 if(NOT ANDROID AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
-   CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+   CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|x86_64|AMD64)$")
   set(NC_DSP_JIT_DEFAULT ON)
 endif()
 option(HAKUX_DSP_JIT "Build the DSP56300 JIT for full audio processing" ${NC_DSP_JIT_DEFAULT})
