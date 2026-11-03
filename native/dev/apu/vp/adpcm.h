@@ -86,11 +86,8 @@ static int adpcm_decode_block (int16_t *outbuf, const uint8_t *inbuf, size_t inb
         *outbuf++ = pcmdata[ch] = (int16_t) (inbuf [0] | (inbuf [1] << 8));
         index[ch] = inbuf [2];
 
-        // The fourth header byte is reserved and not validated by the MCPX;
-        // titles ship blocks where it is non-zero (JSRF pads every ADPCM
-        // buffer with 0x08). Clamp the step index rather than refusing the
-        // block: step_table has 89 entries, and index is int8_t, so header
-        // values above 127 arrive negative.
+        // Some titles set the reserved fourth header byte. Clamp the signed
+        // step index to the table bounds; bytes above 127 become negative.
         CLIP(index[ch], 0, 88);
 
         inbufsize -= 4;

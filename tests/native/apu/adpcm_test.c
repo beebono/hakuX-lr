@@ -1,11 +1,5 @@
 /* Copyright (C) 2026-present PortareOS */
-/*
- * Host test of the APU's ADPCM block decoder (native/dev/apu/vp/adpcm.h):
- * a block's reserved header byte doesn't refuse it, and a step index past
- * the table's 89 entries is clamped.
- *
- *   cc -I<repo> tests/native/apu/adpcm_test.c -o adpcm_test && ./adpcm_test
- */
+/* Test reserved header bytes and step-index clamping for mono and stereo. */
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -21,8 +15,7 @@ static void check(int ok, const char *what)
     g_fail += !ok;
 }
 
-/* A block of `channels` channels: each header pcm, index, reserved; then
- * eight 4-byte chunks a channel of data */
+/* Channel headers (PCM, index, reserved), then interleaved 4-byte chunks. */
 static void block(uint8_t *b, int channels, uint8_t index, uint8_t reserved)
 {
     for (int ch = 0; ch < channels; ch++) {
@@ -47,7 +40,7 @@ int main(void)
         snprintf(what, sizeof(what), "%d ch: a block decodes 65 samples", channels);
         check(n == 65, what);
 
-        block(b, channels, 40, 0x08);   /* JSRF's padding */
+        block(b, channels, 40, 0x08);
         memset(out, 0, sizeof(out));
         n = adpcm_decode_block(out, b, (size_t)channels * 36, channels);
         snprintf(what, sizeof(what), "%d ch: reserved byte 0x08 decodes the same", channels);

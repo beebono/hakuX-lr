@@ -44,7 +44,7 @@ target_link_libraries(apu-resample-smoke PRIVATE hakux_native m)
 target_link_options(apu-resample-smoke PRIVATE -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc)
 add_test(NAME apu-resample-smoke COMMAND apu-resample-smoke)
 set_tests_properties(apu-resample-smoke PROPERTIES TIMEOUT 60)
-# The APU's ADPCM block decoder: reserved header bytes, step indexes past the table.
+# Check ADPCM reserved bytes and step-index clamping.
 add_executable(apu-adpcm-test "${NC_REPO}/tests/native/apu/adpcm_test.c")
 target_include_directories(apu-adpcm-test PRIVATE "${NC_REPO}")
 add_test(NAME apu-adpcm-test COMMAND apu-adpcm-test)

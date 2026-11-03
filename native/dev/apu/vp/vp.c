@@ -1408,10 +1408,8 @@ static int voice_get_samples(MCPXAPUState *d, uint8_t *c, uint32_t v,
                 segment_length = apu_ram_ld32(addr + 4);
             }
         }
-        /* An entry the guest hasn't filled in yet (a race with the title:
-         * xemu-project/xemu#380, Advent Rising, Dead Man's Hand, Top Spin,
-         * Dave Mirra Freestyle BMX 2): nothing this cycle, the next one
-         * reads it again. */
+        /* The guest may not have filled this SSL entry yet. Retry next cycle
+         * without advancing the stream. */
         if (!APU_CHECK(segment_offset != 0)) {
             return -1;
         }
@@ -1422,8 +1420,7 @@ static int voice_get_samples(MCPXAPUState *d, uint8_t *c, uint32_t v,
         seg_s = (segment_length >> 23) & 1;
         assert(seg_cs == container_size_index);
         assert((seg_spb + 1) == samples_per_block);
-        /* A segment of another channel layout than the voice's (surround
-         * set-ups, xemu-project/xemu#1581): the voice's is kept. */
+        /* Keep the voice's channel layout when the segment disagrees. */
         if (seg_s != stereo) {
             DPRINTF("Voice %d: segment stereo=%d, voice stereo=%d\n", v, seg_s, stereo);
             seg_s = stereo;
