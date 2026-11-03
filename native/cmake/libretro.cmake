@@ -19,6 +19,10 @@ target_compile_definitions(hakux_libretro PRIVATE "HAKUX_VERSION=\"${HAKUX_VERSI
   "HAKUX_LR_END_PROCESS=$<BOOL:${HAKUX_LR_END_PROCESS}>")
 target_compile_options(hakux_libretro PRIVATE -Wall -Wno-unused-parameter)
 set_target_properties(hakux_libretro PROPERTIES PREFIX "" C_VISIBILITY_PRESET hidden)
+if(ANDROID)
+  # RetroArch for Android lists cores by this name (and its info file without "_android")
+  set_target_properties(hakux_libretro PROPERTIES OUTPUT_NAME hakux_libretro_android)
+endif()
 set(NC_LR_EXPORTS "${CMAKE_CURRENT_SOURCE_DIR}/libretro/exports.map")
 target_link_options(hakux_libretro PRIVATE -Wl,--exclude-libs,ALL -Wl,--gc-sections -Wl,-z,defs
   "-Wl,--version-script=${NC_LR_EXPORTS}")

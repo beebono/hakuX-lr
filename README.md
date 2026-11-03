@@ -1,8 +1,8 @@
 # hakuX-lr
 
 hakuX-lr is an original Xbox emulator for RetroArch on ARM64 (aarch64) and
-AMD64 (x86-64) Linux. It is based on
-[hakuX](https://github.com/rfandango/hakuX) and comes with
+AMD64 (x86-64) Linux, with an experimental build for RetroArch on Android. It
+is based on [hakuX](https://github.com/rfandango/hakuX) and comes with
 [PortareOS](https://github.com/portare-ch/portareos) on the Retroid Pocket Nova.
 
 You need your own game images. To play games, you do not need a BIOS,
@@ -128,6 +128,34 @@ Sandboxed RetroArch installations also need access to `/dev/kvm`. If a game
 will not start, check the core's log for missing CPU or KVM features. Once
 KVM is ready, follow the
 [RetroArch installation steps above](#play-on-other-aarch64-linux-systems).
+
+<a id="play-on-android"></a>
+
+### RetroArch on Android (experimental)
+
+The Android build is experimental and has seen little testing on devices.
+It needs a 64-bit (arm64-v8a) device with Android 9 or newer, a GPU driver
+with Vulkan 1.2 or newer (1.3 recommended), and RetroArch from the Play Store
+or [retroarch.com](https://www.retroarch.com/?page=platforms).
+
+1. Download `hakux-<version>-android-arm64.zip` from the
+   [releases](https://github.com/portare-ch/hakuX-lr/releases) and extract it
+   on the device.
+2. Set **Settings → Drivers → Video** to **vulkan**, then restart RetroArch.
+3. Choose **Load Core → Install or Restore a Core** and select
+   `hakux_libretro_android.so`.
+4. Optional: copy `hakux_libretro.info` into RetroArch's **Core Info**
+   directory (**Settings → Directory → Core Info**). RetroArch then shows the
+   core as **Microsoft - Xbox (hakuX)** and knows which files it opens.
+5. Choose **Load Core**, select the core, then **Load Content** and your
+   `.iso` or `.chd` file.
+
+Saves are kept in `hdd/` under RetroArch's **Save Files** directory. The
+DSP JIT is Linux-only, so **Audio Processing** defaults to **Fast** (no Xbox
+reverb or effects); **Full DSP** runs on a slower interpreter. Save states,
+rewind and run-ahead are not supported. The core logs to Android's log
+(`adb logcat`, tags starting with `hakuX`); include it when you report a
+problem.
 
 ## Game formats
 
