@@ -37,6 +37,7 @@
 .set KeSetEvent,                   THUNK + 4*28
 .set KeSetDisableBoostThread,      THUNK + 4*29
 .set KeQueryBasePriorityThread,    THUNK + 4*30
+.set KeQuerySystemTime,            THUNK + 4*31
 
 /* push imm32 (LLVM's Intel syntax makes "push offset sym" a 16-bit push) */
 .macro PUSHI sym
@@ -507,6 +508,27 @@ _start:
     cmp dword ptr [bev3_ran], 1
     jne fail
 
+    /* 12. KeQuerySystemTime (guest code, KeSystemTime): a time after 2001,
+     * and later after a 10 ms delay */
+    STEP 31
+    PUSHI time1
+    call dword ptr [KeQuerySystemTime]
+    cmp dword ptr [time1 + 4], 0x01C0739B /* 2001-01-01's high part */
+    jb fail
+    PUSHI delay
+    push 0
+    push 0
+    call dword ptr [KeDelayExecutionThread]
+    PUSHI time2
+    call dword ptr [KeQuerySystemTime]
+    mov eax, dword ptr [time2]
+    mov edx, dword ptr [time2 + 4]
+    sub eax, dword ptr [time1]
+    sbb edx, dword ptr [time1 + 4]
+    jnz fail                            /* not over 7 minutes */
+    cmp eax, 90000                      /* at least 9 ms in 100 ns */
+    jb fail
+
     PUSHI passed
     call dword ptr [DbgPrint]
     add esp, 4
@@ -687,6 +709,8 @@ cdname: .word 14, 15
     .long cdstr
 cdstr: .asciz "\\Device\\CdRom0"
 hd: .long 0
+time1: .quad 0
+time2: .quad 0
 /* start_waiter's blocks: KEVENT, KTHREAD, ran */
 bev1: .space 0x10
 bev1_thread: .long 0
