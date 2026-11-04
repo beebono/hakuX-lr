@@ -335,6 +335,8 @@ void nc_paging_flush(NcKernel *k);
 bool nc_paging_fault(NcKernel *k, uint32_t va);
 /* " ret ret ...": up to six return addresses up the guest's EBP frames. */
 void nc_kernel_frame_chain(NcKernel *k, NcFrame *f, char *buf, size_t len);
+/* ex.c: the guest's string at va in buf, as far as its pages are mapped. */
+const char *nc_kernel_guest_str(NcKernel *k, uint32_t va, char *buf, size_t len);
 
 /* Allocates an object (OBJECT_HEADER + zeroed body) and returns the body VA. */
 /* ObfDereferenceObject: an object no one holds any more is freed (ob.c). */

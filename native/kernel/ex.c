@@ -614,7 +614,7 @@ static uint64_t ObfDereferenceObject(NcKernel *k, NcFrame *f, const uint32_t *a)
 /* The guest's string at va in buf (at most len - 1 bytes), as far as its
  * pages are mapped: a title's bad pointer ends it rather than faulting the
  * host. */
-static const char *guest_str(NcKernel *k, uint32_t va, char *buf, size_t len)
+const char *nc_kernel_guest_str(NcKernel *k, uint32_t va, char *buf, size_t len)
 {
     size_t n = 0;
     for (; n + 1 < len; n++) {
@@ -637,7 +637,7 @@ static uint64_t DbgPrint(NcKernel *k, NcFrame *f, const uint32_t *a)
     const uint32_t esp = nc_frame_gpr(f, NC_ESP);
     uint32_t argp = esp + 8; /* after the return address and Format */
     char fmtbuf[512], arg[256];
-    const char *fmt = guest_str(k, a[0], fmtbuf, sizeof(fmtbuf));
+    const char *fmt = nc_kernel_guest_str(k, a[0], fmtbuf, sizeof(fmtbuf));
     char out[512];
     size_t n = 0;
     for (const char *p = fmt; *p && n < sizeof(out) - 32; p++) {
@@ -661,7 +661,7 @@ static uint64_t DbgPrint(NcKernel *k, NcFrame *f, const uint32_t *a)
         spec[s] = 0;
         uint32_t v = nc_vm_rd32(k->vm, argp);
         switch (*p) {
-        case 's': n += (size_t)snprintf(out + n, sizeof(out) - n, spec, v ? guest_str(k, v, arg, sizeof(arg)) : "(null)"); argp += 4; break;
+        case 's': n += (size_t)snprintf(out + n, sizeof(out) - n, spec, v ? nc_kernel_guest_str(k, v, arg, sizeof(arg)) : "(null)"); argp += 4; break;
         case 'c': case 'd': case 'i': case 'u': case 'x': case 'X':
             n += (size_t)snprintf(out + n, sizeof(out) - n, spec, v); argp += 4; break;
         case 'p': n += (size_t)snprintf(out + n, sizeof(out) - n, "%08x", v); argp += 4; break;
