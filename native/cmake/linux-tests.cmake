@@ -84,6 +84,12 @@ if(NC_GUEST_TESTS)
   add_test(NAME linux-boundaries
            COMMAND "${Python3_EXECUTABLE}" "${NC_REPO}/tests/native/linux/check.py" "$<TARGET_FILE_DIR:xboxrun>")
   set_tests_properties(linux-boundaries PROPERTIES TIMEOUT 60)
+  # The kernel's queues, completion ports, IRPs and drivers driven by guest
+  # code (assembled for i386 by the compiler; skipped without ld.lld).
+  add_test(NAME kernel-io
+           COMMAND "${Python3_EXECUTABLE}" "${NC_REPO}/tests/native/linux/kernel_io.py" "$<TARGET_FILE_DIR:xboxrun>"
+                   "${CMAKE_C_COMPILER}")
+  set_tests_properties(kernel-io PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
 endif()
 if(TARGET hakux_libretro)
   # The APU made again in one process (a relaunch), its EP's samples through
