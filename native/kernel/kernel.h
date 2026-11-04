@@ -487,6 +487,22 @@ uint32_t nc_ke_set_event(NcKernel *k, uint32_t event);
 void nc_ke_clear_event(NcKernel *k, uint32_t event);
 /* KeInitializeEvent: type 0 notification, 1 synchronization. */
 void nc_ke_init_event(NcKernel *k, uint32_t event, unsigned type, bool signaled);
+/* Kernel queues (KQUEUE, an I/O completion port's body): KeInitializeQueue;
+ * KeInsertQueue / KeInsertHeadQueue (a waiter takes the entry), returning the
+ * old depth; KeRemoveQueue for the running thread, returning the entry or a
+ * status (STATUS_TIMEOUT), or blocking (the entry comes as the wait's result,
+ * see nc_kernel_wait_cont); the entries queued. */
+void nc_ke_queue_init(NcKernel *k, uint32_t q, uint32_t count);
+uint32_t nc_ke_queue_insert(NcKernel *k, uint32_t q, uint32_t entry, bool at_head);
+uint32_t nc_ke_queue_remove(NcKernel *k, uint32_t q, uint32_t timeout_va);
+int32_t nc_ke_queue_depth(NcKernel *k, uint32_t q);
+/* The running thread waits for one object, forever, not alertable: its
+ * status, or (blocked) nc_kernel_wait_cont's. */
+uint32_t nc_ke_wait_one(NcKernel *k, uint32_t obj);
+/* KeAlertThread for t and mode (0 kernel, 1 user): returns the old alert. */
+bool nc_ke_alert(NcKernel *k, NcThread *t, unsigned mode);
+/* KeTestAlertThread: the running thread's alert for mode, cleared. */
+bool nc_ke_test_alert(NcKernel *k, unsigned mode);
 /* The running thread waits for the host's work for its call (no object, no
  * timeout); nc_ke_wake ends it with the call's status. */
 void nc_ke_block(NcKernel *k);
