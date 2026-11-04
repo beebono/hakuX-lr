@@ -36,12 +36,18 @@
  * the other side at -24.4 dB (at 1 kHz) that this mix leaves out. What the
  * hardware's analog stage and level do isn't measured.
  *
- * A send's source channel is its slot modulo the source's channels: a 2D
- * voice's own (vp.c mix_one_bin), a 3D voice's HRTF filter's two ears
- * (DirectSound's HRTF submixes in the order front left, front right, back
- * left, back right: the left ear to the even slots). Its destination is
- * the bin it names; its headroom the shift the VP's mix-bin path gives that
- * send (vp.c).
+ * A send's source channel (vp_send_channel): a 2D voice's own channel, its
+ * slot modulo the source's channels (vp.c mix_one_bin); a 3D voice's first
+ * four slots, the VP's HRTF outputs, its HRTF filter's ears, the left ear
+ * the first two and the right ear the last two. Those four go to the bins
+ * the guest names with SET_HRTF_SUBMIXES, and DirectSound names them in the
+ * order 6, 8, 7, 9: 3D front left, back left, front right, back right
+ * (0x09070806 in both Dead or Alive 3 and The Thing), so each ear reaches
+ * its own side's front and back bins. Taken as the even slots for the left
+ * ear, the left ear went to front left and front right and the right ear
+ * to both back bins: every 3D sound came out the same on both speakers.
+ * Its destination is the bin it names; its headroom the shift the VP's
+ * mix-bin path gives that send (vp.c).
  */
 #ifndef NATIVE_DEV_APU_VP_STEREO_ROUTE_H
 #define NATIVE_DEV_APU_VP_STEREO_ROUTE_H
@@ -63,6 +69,14 @@
 #define VP_BIN_3D_BACK_RIGHT  9
 #define VP_SENDS            8
 #define VP_DOWNMIX_SIDE     0.70710678f     /* -3 dB */
+
+/* The source channel of a voice's send slot: a 3D voice's HRTF outputs
+ * (slots 0 to 3) its left ear for the first two and its right ear for the
+ * last two; any other send its own channel, the slot modulo channels */
+static inline unsigned vp_send_channel(int slot, bool three_d, unsigned channels)
+{
+    return three_d && slot < 4 ? (unsigned)slot >> 1 : (unsigned)slot % channels;
+}
 
 /* A 2D voice's route in the VP's own mix, a sound's (vp.c) */
 enum { VP_ROUTE_UNDECIDED = 0, VP_ROUTE_SPEAKERS = 1, VP_ROUTE_MONITOR = 2 };
@@ -120,10 +134,11 @@ static inline int vp_stereo_classify(const int bin[VP_SENDS], const float att[VP
  * from source channel s to output o (0 left, 1 right), each speaker send's
  * ea * attenuation / 2^shift[send] (its headroom) added in by its downmix
  * weights; every gain 0 when its speaker sends are muted. channels: the
- * source's (a 3D voice's two ears). */
+ * source's (a 3D voice's two ears); three_d: a 3D voice, its first four
+ * sends its ears' (vp_send_channel). */
 static inline void vp_stereo_gains(const int bin[VP_SENDS], const float att[VP_SENDS],
-                                   const uint8_t shift[VP_SENDS], unsigned channels, float ea,
-                                   float g[2][2])
+                                   const uint8_t shift[VP_SENDS], unsigned channels, bool three_d,
+                                   float ea, float g[2][2])
 {
     float w[2];
     g[0][0] = g[0][1] = g[1][0] = g[1][1] = 0.0f;
@@ -132,8 +147,9 @@ static inline void vp_stereo_gains(const int bin[VP_SENDS], const float att[VP_S
             continue;
         }
         const float a = ea * att[b] / (float)(1u << shift[b]);
-        g[0][b % channels] += a * w[0];
-        g[1][b % channels] += a * w[1];
+        const unsigned src = vp_send_channel(b, three_d, channels);
+        g[0][src] += a * w[0];
+        g[1][src] += a * w[1];
     }
 }
 

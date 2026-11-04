@@ -25,6 +25,7 @@ typedef struct {
     uint16_t vol[VP_SENDS];
     uint8_t headroom[NUM_MIXBINS];
     unsigned channels;
+    bool three_d;               /* its first four sends its HRTF ears' */
     float ea;
 } Voice;
 
@@ -60,7 +61,7 @@ static void gains(const Voice *v, float g[2][2])
         att[b] = att_of(v->vol[b]);
         shift[b] = v->headroom[v->bin[b]];
     }
-    vp_stereo_gains(v->bin, att, shift, v->channels, v->ea, g);
+    vp_stereo_gains(v->bin, att, shift, v->channels, v->three_d, v->ea, g);
 }
 
 /* a frame of the voice's samples: channel 0 a ramp, channel 1 another (a
@@ -345,19 +346,33 @@ static void test_gains_fade_to_mute(void)
     HT_CHECK(last == 0.0f);
 }
 
-/* A 3D voice's sends to the 3D bins (its HRTF submixes): its two ears the
- * sources, the left ear the even slots; the front pair to its own speaker at
- * 0 dB, the back pair at -3 dB (the GP's crosstalk stage, then the EP's
- * downmix, as measured), each send at its own headroom */
-static void test_3d_bins(void)
+/* DirectSound's HRTF submixes (SET_HRTF_SUBMIXES 0x09070806 in Dead or
+ * Alive 3 and The Thing): the VP's HRTF outputs 0 to 3 into 3D front left,
+ * back left, front right and back right */
+static const int k_ds_hrtf_bins[4] = {VP_BIN_3D_FRONT_LEFT, VP_BIN_3D_BACK_LEFT,
+                                      VP_BIN_3D_FRONT_RIGHT, VP_BIN_3D_BACK_RIGHT};
+
+static Voice voice_3d(void)
 {
     Voice v = voice(2);         /* the HRTF filter's ears */
+    v.three_d = true;
     for (int b = 0; b < 4; b++) {
-        v.bin[b] = VP_BIN_3D_FRONT_LEFT + b;
+        v.bin[b] = k_ds_hrtf_bins[b];
     }
+    return v;
+}
+
+/* A 3D voice's sends to the 3D bins (its HRTF submixes): its two ears the
+ * sources, the left ear the first two slots and the right ear the last
+ * two; the front pair to its own speaker at 0 dB, the back pair at -3 dB
+ * (the GP's crosstalk stage, then the EP's downmix, as measured), each send
+ * at its own headroom */
+static void test_3d_bins(void)
+{
+    Voice v = voice_3d();
     v.vol[0] = 0;               /* left ear, 3D front left, 0 dB */
-    v.vol[1] = 0x300;           /* right ear, 3D front right, -12 dB */
-    v.vol[2] = 0;               /* left ear, 3D back left, 0 dB */
+    v.vol[2] = 0x300;           /* right ear, 3D front right, -12 dB */
+    v.vol[1] = 0;               /* left ear, 3D back left, 0 dB */
     float out[N][2], in[N][2];
     mix(&v, out);
     source(in, 2);
@@ -366,13 +381,21 @@ static void test_3d_bins(void)
         HT_CHECK(fabsf(out[i][0] - l * in[i][0]) < 1e-5f);
         HT_CHECK(fabsf(out[i][1] - r * in[i][1]) < 1e-5f);
     }
-    /* behind the listener only: 3 dB under the same sound in front */
-    Voice back = voice(2), front = voice(2);
+    /* every HRTF send at 0 dB: each ear on its own side only (the even
+     * slots taken as the left ear put the same mix on both speakers) */
+    Voice all4 = voice_3d();
     for (int b = 0; b < 4; b++) {
-        back.bin[b] = front.bin[b] = VP_BIN_3D_FRONT_LEFT + b;
+        all4.vol[b] = 0;
     }
-    front.vol[0] = front.vol[1] = 0;
-    back.vol[2] = back.vol[3] = 0;
+    mix(&all4, out);
+    for (int i = 0; i < N; i++) {
+        HT_CHECK(fabsf(out[i][0] - l * in[i][0]) < 1e-5f);
+        HT_CHECK(fabsf(out[i][1] - l * in[i][1]) < 1e-5f);
+    }
+    /* behind the listener only: 3 dB under the same sound in front */
+    Voice back = voice_3d(), front = voice_3d();
+    front.vol[0] = front.vol[2] = 0;
+    back.vol[1] = back.vol[3] = 0;
     float gf[2][2], gb[2][2];
     HT_CHECK(classify(&back) == VP_ROUTE_SPEAKERS);
     gains(&front, gf);

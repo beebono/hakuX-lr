@@ -2023,12 +2023,17 @@ static void voice_process(MCPXAPUState *d, uint8_t *c,
 
     /* Deinterleave samples[32][2] into per-channel contiguous buffers once
      * (amortized across 8 subsequent mix_one_bin calls). mix_one_bin
-     * (NEON on aarch64, SSE2/AVX2 on x86-64) reads contiguous float[32]. */
+     * (NEON on aarch64, SSE2/AVX2 on x86-64) reads contiguous float[32].
+     * A 3D voice's second is its right ear, a mono one's too (its HRTF
+     * filter's, or the copy of its channel without it): its HRTF sends take
+     * an ear each (vp_send_channel), where a mono voice's right ear was
+     * lost (slot % 1). */
+    const bool three_d = v < MCPX_HW_MAX_3D_VOICES;
     float channel_buf[2][NUM_SAMPLES_PER_FRAME];
     for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
         channel_buf[0][i] = samples[i][0];
     }
-    if (channels == 2) {
+    if (channels == 2 || three_d) {
         for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
             channel_buf[1][i] = samples[i][1];
         }
@@ -2044,14 +2049,14 @@ static void voice_process(MCPXAPUState *d, uint8_t *c,
         }
         float g = ea_value;
         float hr;
-        if ((v < MCPX_HW_MAX_3D_VOICES) && (b < 4)) {
+        if (three_d && (b < 4)) {
             // FIXME: Not sure if submix/voice headroom factor in for HRTF
             hr = 1 << d->vp.hrtf_headroom;
         } else {
             hr = 1 << d->vp.submix_headroom[bin[b]];
         }
         g *= attenuate(vol[b]) / hr;
-        mix_one_bin(mixbins[bin[b]], channel_buf[b % channels], g);
+        mix_one_bin(mixbins[bin[b]], channel_buf[vp_send_channel(b, three_d, channels)], g);
     }
 
     if (d->monitor.point == MCPX_APU_DEBUG_MON_VP) {
@@ -2063,7 +2068,6 @@ static void voice_process(MCPXAPUState *d, uint8_t *c,
          * mix-bin path above. The route is its sound's, chosen at the first
          * frame with an audible send. */
         if (!multipass && voice_list != NV1BA0_PIO_SET_ANTECEDENT_VOICE_LIST_MP_TOP - 1) {
-            const bool three_d = v < MCPX_HW_MAX_3D_VOICES;
             float att[VP_SENDS];
             uint8_t shift[VP_SENDS];
             for (int b = 0; b < VP_SENDS; b++) {
@@ -2075,7 +2079,7 @@ static void voice_process(MCPXAPUState *d, uint8_t *c,
             }
             if (d->vp.route[v] == VP_ROUTE_SPEAKERS) {
                 float g2[2][2];
-                vp_stereo_gains(bin, att, shift, three_d ? 2 : channels, ea_value, g2);
+                vp_stereo_gains(bin, att, shift, three_d ? 2 : channels, three_d, ea_value, g2);
                 vp_stereo_mix(sample_buf, samples, g2, three_d ? 2 : channels);
                 return;
             }
