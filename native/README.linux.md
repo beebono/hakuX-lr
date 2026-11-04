@@ -108,7 +108,10 @@ Use a positive `NC_TIMEOUT`. Headless mode disables graphics and audio
 output and stores the emulated disk and caches in the supplied directory.
 Use `--render` to render without a display and capture frames to
 `<data directory>/frames/` every 2 seconds (`NC_CAPTURE_EVERY`, limited by
-`NC_CAPTURE_MAX`). Accepts XISO/full-dump `.iso` files and DVD CHDs.
+`NC_CAPTURE_MAX`). `NC_AUDIO_DUMP=<file>` writes the audio output there
+as well, raw 48 kHz 16-bit stereo (`ffmpeg -f s16le -ar 48000 -ac 2 -i
+<file> out.wav`); `NC_APU_DSP=1` selects the full DSP, 0 the fast dry mix.
+Accepts XISO/full-dump `.iso` files and DVD CHDs.
 
 `vulkan-probe` checks renderer requirements and creates a device. It does
 not render, create a surface or verify shared-memory imports.
