@@ -22,6 +22,7 @@ enum {
     OBJ_NOTIFICATION_EVENT = 0,
     OBJ_SYNCHRONIZATION_EVENT = 1,
     OBJ_MUTANT = 2,
+    OBJ_QUEUE = 4,
     OBJ_SEMAPHORE = 5,
     OBJ_THREAD = 6,
     OBJ_NOTIFICATION_TIMER = 8,
@@ -31,11 +32,23 @@ enum {
 #define HDR_SIGNAL_STATE 0x04
 #define HDR_WAIT_LIST    0x08
 #define MUTANT_OWNER     0x18
+#define MUTANT_ABANDONED 0x1C
 #define SEMAPHORE_LIMIT  0x10
 #define CS_LOCK_COUNT    0x10
 #define CS_RECURSION     0x14
 #define CS_OWNER         0x18
 #define PCR_IRQL         0x24
+/* KQUEUE: EntryListHead 0x10, CurrentCount 0x18, MaximumCount 0x1C,
+ * ThreadListHead 0x20; a thread's KTHREAD.Queue 0x78, QueueListEntry 0x7C */
+#define QUEUE_ENTRIES    0x10
+#define QUEUE_CURRENT    0x18
+#define QUEUE_MAXIMUM    0x1C
+#define QUEUE_THREADS    0x20
+#define QUEUE_SIZE       0x28
+#define KT_ALERTED       0x2D
+#define KT_QUEUE         0x78
+#define KT_QUEUE_LIST    0x7C
+#define STATUS_ALERTED   0x00000101u
 
 #define WAIT_ALL 0
 #define WAIT_ANY 1
@@ -387,10 +400,15 @@ static bool is_signaled(NcKernel *k, uint32_t obj, const NcThread *t)
     return signal_state(k, obj) > 0;
 }
 
-static void acquire(NcKernel *k, uint32_t obj, const NcThread *t)
+static uint32_t queue_take(NcKernel *k, uint32_t q);
+
+/* Takes obj for t; a queue gives its first entry (else 0). */
+static uint32_t acquire(NcKernel *k, uint32_t obj, const NcThread *t)
 {
     const uint8_t type = *(const uint8_t *)nc_vm_host(k->vm, obj);
     switch (type) {
+    case OBJ_QUEUE:
+        return queue_take(k, obj);
     case OBJ_SYNCHRONIZATION_EVENT:
     case OBJ_SYNCHRONIZATION_TIMER:
         set_signal_state(k, obj, 0);
@@ -405,6 +423,7 @@ static void acquire(NcKernel *k, uint32_t obj, const NcThread *t)
     default:
         break; /* notification objects and threads stay signaled */
     }
+    return 0;
 }
 
 /* Index of the object that satisfies the wait (wait-any), 0 for a satisfied
@@ -427,19 +446,23 @@ static int satisfied(NcKernel *k, const NcThread *t, const NcWait *w)
     return -1;
 }
 
-static void take(NcKernel *k, const NcThread *t, const NcWait *w, int idx)
+/* Takes what satisfied the wait; returns the wait's result: the index of the
+ * object (wait-any), 0 (wait-all), or a queue's entry. */
+static uint32_t take(NcKernel *k, const NcThread *t, const NcWait *w, int idx)
 {
+    uint32_t entry = 0;
     if (w->wait_all) {
         for (unsigned i = 0; i < w->count; i++) {
             acquire(k, w->objects[i], t);
         }
     } else {
-        acquire(k, w->objects[idx], t);
+        entry = acquire(k, w->objects[idx], t);
     }
     if (w->cs) {
         nc_vm_wr32(k->vm, w->cs + CS_OWNER, t->ethread);
         nc_vm_wr32(k->vm, w->cs + CS_RECURSION, 1);
     }
+    return entry ? entry : (uint32_t)idx;
 }
 
 uint64_t nc_ke_check_waits(NcKernel *k)
@@ -453,8 +476,7 @@ uint64_t nc_ke_check_waits(NcKernel *k)
         }
         int idx = satisfied(k, t, &t->wait);
         if (idx >= 0) {
-            take(k, t, &t->wait, idx);
-            nc_context_set_gpr(&t->ctx, NC_EAX, (uint32_t)idx);
+            nc_context_set_gpr(&t->ctx, NC_EAX, take(k, t, &t->wait, idx));
             t->state = NC_T_READY;
         } else if (t->wait.deadline_ns && now >= t->wait.deadline_ns) {
             /* A delay ends successfully; a wait times out. */
@@ -516,6 +538,19 @@ static void poll_spin(NcKernel *k)
     s_last_ns = nc_ke_now_ns();
 }
 
+/* A thread's alert (KTHREAD.Alerted, kernel then user mode), cleared. */
+static bool alert_take(NcKernel *k, const NcThread *t)
+{
+    uint8_t *alerted = nc_vm_host(k->vm, t->ethread + KT_ALERTED);
+    for (unsigned mode = 0; mode < 2; mode++) {
+        if (alerted[mode]) {
+            alerted[mode] = 0;
+            return true;
+        }
+    }
+    return false;
+}
+
 /* Waits on objects with an NT timeout (PLARGE_INTEGER in 100 ns: NULL forever,
  * negative relative, positive absolute system time, zero a poll). An
  * alertable wait runs the thread's queued APCs instead and returns
@@ -524,6 +559,9 @@ static uint32_t wait(NcKernel *k, const uint32_t *objs, unsigned count, bool wai
                      uint32_t cs, bool alertable)
 {
     NcThread *t = k->current;
+    if (alertable && t && alert_take(k, t)) {
+        return STATUS_ALERTED;
+    }
     if (alertable && nc_apc_pending(t) && k->frame) {
         const uint32_t esp = nc_frame_gpr(k->frame, NC_ESP);
         if (nc_apc_begin_frame(k, k->frame, t, esp + k->call_pop, nc_vm_rd32(k->vm, esp))) {
@@ -536,8 +574,7 @@ static uint32_t wait(NcKernel *k, const uint32_t *objs, unsigned count, bool wai
 
     int idx = satisfied(k, t, &w);
     if (idx >= 0) {
-        take(k, t, &w, idx);
-        return (uint32_t)idx;
+        return take(k, t, &w, idx);
     }
     const int64_t to = timeout_va ? (int64_t)((uint64_t)nc_vm_rd32(k->vm, timeout_va) |
                                               ((uint64_t)nc_vm_rd32(k->vm, timeout_va + 4) << 32))
@@ -853,6 +890,152 @@ static uint64_t NtReleaseMutant(NcKernel *k, NcFrame *f, const uint32_t *a)
     return NC_STATUS_SUCCESS;
 }
 
+
+/* ------------------------------------------------------------- queues */
+
+static void list_init(NcKernel *k, uint32_t head)
+{
+    nc_vm_wr32(k->vm, head, head);
+    nc_vm_wr32(k->vm, head + 4, head);
+}
+
+static bool list_empty(NcKernel *k, uint32_t head)
+{
+    return nc_vm_rd32(k->vm, head) == head;
+}
+
+static void list_insert(NcKernel *k, uint32_t head, uint32_t entry, bool at_head)
+{
+    const uint32_t prev = at_head ? head : nc_vm_rd32(k->vm, head + 4);
+    const uint32_t next = nc_vm_rd32(k->vm, prev);
+    nc_vm_wr32(k->vm, entry, next);
+    nc_vm_wr32(k->vm, entry + 4, prev);
+    nc_vm_wr32(k->vm, prev, entry);
+    nc_vm_wr32(k->vm, next + 4, entry);
+}
+
+static void list_remove(NcKernel *k, uint32_t entry)
+{
+    const uint32_t next = nc_vm_rd32(k->vm, entry), prev = nc_vm_rd32(k->vm, entry + 4);
+    nc_vm_wr32(k->vm, prev, next);
+    nc_vm_wr32(k->vm, next + 4, prev);
+}
+
+void nc_ke_queue_init(NcKernel *k, uint32_t q, uint32_t count)
+{
+    init_header(k, q, OBJ_QUEUE, QUEUE_SIZE / 4, 0);
+    list_init(k, q + QUEUE_ENTRIES);
+    nc_vm_wr32(k->vm, q + QUEUE_CURRENT, 0);
+    nc_vm_wr32(k->vm, q + QUEUE_MAXIMUM, count ? count : 1);
+    list_init(k, q + QUEUE_THREADS);
+}
+
+/* The queue's first entry, out of it (the queue has one: its SignalState). */
+static uint32_t queue_take(NcKernel *k, uint32_t q)
+{
+    const uint32_t e = nc_vm_rd32(k->vm, q + QUEUE_ENTRIES);
+    const uint32_t cur = nc_vm_rd32(k->vm, q + QUEUE_CURRENT);
+    static bool told;
+    if (cur >= nc_vm_rd32(k->vm, q + QUEUE_MAXIMUM) && !told) {
+        told = true;
+        nc_log("hakuX-native", "ke: queue %08x gives an entry to a thread past its MaximumCount (%u)", q,
+               nc_vm_rd32(k->vm, q + QUEUE_MAXIMUM));
+    }
+    list_remove(k, e);
+    set_signal_state(k, q, signal_state(k, q) - 1);
+    nc_vm_wr32(k->vm, q + QUEUE_CURRENT, cur + 1);
+    return e;
+}
+
+uint32_t nc_ke_queue_insert(NcKernel *k, uint32_t q, uint32_t entry, bool at_head)
+{
+    const int32_t old = signal_state(k, q);
+    list_insert(k, q + QUEUE_ENTRIES, entry, at_head);
+    set_signal_state(k, q, old + 1);
+    signaled(k);    /* a waiter takes it */
+    return (uint32_t)old;
+}
+
+int32_t nc_ke_queue_depth(NcKernel *k, uint32_t q)
+{
+    return signal_state(k, q);
+}
+
+/* The running thread becomes q's (out of another queue's), its slot in q given
+ * back while it waits for the next entry. */
+static void queue_associate(NcKernel *k, uint32_t q)
+{
+    const uint32_t et = k->current->ethread;
+    const uint32_t old = nc_vm_rd32(k->vm, et + KT_QUEUE);
+    if (old) {
+        const uint32_t cur = nc_vm_rd32(k->vm, old + QUEUE_CURRENT);
+        nc_vm_wr32(k->vm, old + QUEUE_CURRENT, cur ? cur - 1 : 0);
+        if (old == q) {
+            return;
+        }
+        list_remove(k, et + KT_QUEUE_LIST);
+    }
+    nc_vm_wr32(k->vm, et + KT_QUEUE, q);
+    list_insert(k, q + QUEUE_THREADS, et + KT_QUEUE_LIST, false);
+}
+
+uint32_t nc_ke_wait_one(NcKernel *k, uint32_t obj)
+{
+    return wait(k, &obj, 1, false, 0, 0, false);
+}
+
+uint32_t nc_ke_queue_remove(NcKernel *k, uint32_t q, uint32_t timeout_va)
+{
+    /* TODO: the queue's MaximumCount isn't enforced */
+    queue_associate(k, q);
+    return wait(k, &q, 1, false, timeout_va, 0, false);
+}
+
+/* KeInitializeQueue(Queue, Count) */
+static uint64_t KeInitializeQueue(NcKernel *k, NcFrame *f, const uint32_t *a)
+{
+    nc_ke_queue_init(k, a[0], a[1]);
+    return 0;
+}
+
+/* KeInsertQueue(Queue, Entry) -> previous state */
+static uint64_t KeInsertQueue(NcKernel *k, NcFrame *f, const uint32_t *a)
+{
+    return nc_ke_queue_insert(k, a[0], a[1], false);
+}
+
+/* KeInsertHeadQueue(Queue, Entry) -> previous state */
+static uint64_t KeInsertHeadQueue(NcKernel *k, NcFrame *f, const uint32_t *a)
+{
+    return nc_ke_queue_insert(k, a[0], a[1], true);
+}
+
+/* KeRemoveQueue(Queue, WaitMode, Timeout) -> the entry, or STATUS_TIMEOUT */
+static uint64_t KeRemoveQueue(NcKernel *k, NcFrame *f, const uint32_t *a)
+{
+    return nc_ke_queue_remove(k, a[0], a[2]);
+}
+
+/* KeRundownQueue(Queue) -> the entries left, as a ring without the head, or NULL.
+ * The queue's threads leave it. */
+static uint64_t KeRundownQueue(NcKernel *k, NcFrame *f, const uint32_t *a)
+{
+    const uint32_t q = a[0];
+    uint32_t first = 0;
+    if (!list_empty(k, q + QUEUE_ENTRIES)) {
+        first = nc_vm_rd32(k->vm, q + QUEUE_ENTRIES);
+        list_remove(k, q + QUEUE_ENTRIES);
+        list_init(k, q + QUEUE_ENTRIES);
+        set_signal_state(k, q, 0);
+    }
+    while (!list_empty(k, q + QUEUE_THREADS)) {
+        const uint32_t e = nc_vm_rd32(k->vm, q + QUEUE_THREADS);
+        list_remove(k, e);
+        nc_vm_wr32(k->vm, e - KT_QUEUE_LIST + KT_QUEUE, 0);
+    }
+    return first;
+}
+
 /* --------------------------------------------------------------- waits */
 
 /* KeWaitForSingleObject(Object, WaitReason, WaitMode, Alertable, Timeout) */
@@ -1157,6 +1340,130 @@ static uint8_t *irql(NcKernel *k)
     return (uint8_t *)nc_vm_host(k->vm, k->kpcr_va + PCR_IRQL);
 }
 
+/* ------------------------------------------------- queries and alerts */
+
+/* The object behind a handle of the given type, with the NT status for a
+ * wrong handle or type. */
+static uint32_t typed_object(NcKernel *k, uint32_t handle, enum NcObType want, uint32_t *status)
+{
+    enum NcObType type;
+    const uint32_t obj = nc_ob_lookup(k, handle, &type);
+    *status = !obj ? NC_STATUS_INVALID_HANDLE : type != want ? NC_STATUS_OBJECT_TYPE_MISMATCH : NC_STATUS_SUCCESS;
+    return *status == NC_STATUS_SUCCESS ? obj : 0;
+}
+
+/* NtQueryEvent(EventHandle, EventInformation) -> { EventType, EventState } */
+static uint64_t NtQueryEvent(NcKernel *k, NcFrame *f, const uint32_t *a)
+{
+    uint32_t st;
+    const uint32_t ev = typed_object(k, a[0], NC_OB_EVENT, &st);
+    if (ev) {
+        nc_vm_wr32(k->vm, a[1], *(const uint8_t *)nc_vm_host(k->vm, ev));
+        nc_vm_wr32(k->vm, a[1] + 4, (uint32_t)signal_state(k, ev));
+    }
+    return st;
+}
+
+/* NtQueryMutant(MutantHandle, MutantInformation) -> { CurrentCount, OwnedByCaller, AbandonedState } */
+static uint64_t NtQueryMutant(NcKernel *k, NcFrame *f, const uint32_t *a)
+{
+    uint32_t st;
+    const uint32_t m = typed_object(k, a[0], NC_OB_MUTANT, &st);
+    if (m) {
+        uint8_t *info = nc_vm_host(k->vm, a[1]);
+        nc_vm_wr32(k->vm, a[1], (uint32_t)signal_state(k, m));
+        info[4] = k->current && nc_vm_rd32(k->vm, m + MUTANT_OWNER) == k->current->ethread;
+        info[5] = *(const uint8_t *)nc_vm_host(k->vm, m + MUTANT_ABANDONED);
+    }
+    return st;
+}
+
+/* NtQuerySemaphore(SemaphoreHandle, SemaphoreInformation) -> { CurrentCount, MaximumCount } */
+static uint64_t NtQuerySemaphore(NcKernel *k, NcFrame *f, const uint32_t *a)
+{
+    uint32_t st;
+    const uint32_t sem = typed_object(k, a[0], NC_OB_SEMAPHORE, &st);
+    if (sem) {
+        nc_vm_wr32(k->vm, a[1], (uint32_t)signal_state(k, sem));
+        nc_vm_wr32(k->vm, a[1] + 4, nc_vm_rd32(k->vm, sem + SEMAPHORE_LIMIT));
+    }
+    return st;
+}
+
+/* KeSetEventBoostPriority(Event, Thread): the event's first waiter goes on
+ * (*Thread, if given), the event staying clear; with no waiter it is set. */
+static uint64_t KeSetEventBoostPriority(NcKernel *k, NcFrame *f, const uint32_t *a)
+{
+    for (unsigned i = 0; i < k->threads_hi; i++) {
+        NcThread *t = &k->threads[i];
+        if (t->state != NC_T_WAITING || t->wait.wait_all) {
+            continue;
+        }
+        for (unsigned j = 0; j < t->wait.count; j++) {
+            if (t->wait.objects[j] == a[0]) {
+                nc_context_set_gpr(&t->ctx, NC_EAX, j);
+                t->state = NC_T_READY;
+                if (a[1]) {
+                    nc_vm_wr32(k->vm, a[1], t->ethread);
+                }
+                if (k->current && t->priority > k->current->priority) {
+                    k->resched = true;
+                }
+                return 0;
+            }
+        }
+    }
+    set_event(k, a[0]);
+    return 0;
+}
+
+/* Alerts thread t for mode (0 kernel, 1 user): one in an alertable wait ends
+ * it with STATUS_ALERTED, else the alert is kept. Returns the mode's old alert. */
+bool nc_ke_alert(NcKernel *k, NcThread *t, unsigned mode)
+{
+    uint8_t *alerted = nc_vm_host(k->vm, t->ethread + KT_ALERTED + (mode & 1));
+    const bool was = *alerted;
+    if (was) {
+        return true;
+    }
+    if (t->state == NC_T_WAITING && t->wait.alertable) {
+        nc_ke_wake(k, t, STATUS_ALERTED);
+    } else {
+        *alerted = 1;
+    }
+    return false;
+}
+
+/* The running thread's alert for mode, cleared (KeTestAlertThread). */
+bool nc_ke_test_alert(NcKernel *k, unsigned mode)
+{
+    if (!k->current) {
+        return false;
+    }
+    uint8_t *alerted = nc_vm_host(k->vm, k->current->ethread + KT_ALERTED + (mode & 1));
+    const bool was = *alerted;
+    *alerted = 0;
+    return was;
+}
+
+/* KeAlertThread(Thread, AlertMode) -> the old alert */
+static uint64_t KeAlertThread(NcKernel *k, NcFrame *f, const uint32_t *a)
+{
+    NcThread *t = nc_ps_thread_of(k, a[0]);
+    return t ? nc_ke_alert(k, t, a[1] & 0xff) : 0;
+}
+
+/* KiUnlockDispatcherDatabase(OldIrql): the IRQL back to OldIrql, and a
+ * thread readied meanwhile runs if it should. */
+static uint64_t KiUnlockDispatcherDatabase(NcKernel *k, NcFrame *f, const uint32_t *a)
+{
+    *irql(k) = (uint8_t)a[0];
+    if ((uint8_t)a[0] < 2) {
+        k->resched = true;
+    }
+    return 0;
+}
+
 /* debug: the IRQL changes in the GPU event trace (push-buffer mode) */
 static void irql_trace(NcKernel *k, unsigned op, uint8_t old, uint8_t now)
 {
@@ -1345,6 +1652,7 @@ static NcThread *thread_arg(NcKernel *k, uint32_t kthread)
 }
 
 #define BASE_PRIORITY 8
+#define KP_BASE_PRIORITY 0x18
 
 /* KeSetBasePriorityThread(Thread, Increment) -> old increment. An increment of
  * +-16 saturates to the top or bottom of the dynamic range. */
@@ -1378,6 +1686,26 @@ static uint64_t KeSetPriorityThread(NcKernel *k, NcFrame *f, const uint32_t *a)
     }
     int old = t->priority;
     t->priority = (int32_t)a[1];
+    k->resched = true;
+    return (uint32_t)old;
+}
+
+/* KeSetPriorityProcess(Process, Priority) -> the old base priority. Every
+ * thread's priority moves by as much, within its class (1-15, 16-31). */
+static uint64_t KeSetPriorityProcess(NcKernel *k, NcFrame *f, const uint32_t *a)
+{
+    uint8_t *base = nc_vm_host(k->vm, a[0] + KP_BASE_PRIORITY);
+    const int old = (int8_t)*base, now = (int8_t)a[1];
+    *base = (uint8_t)now;
+    for (unsigned i = 0; i < k->threads_hi; i++) {
+        NcThread *t = &k->threads[i];
+        if (t->state == NC_T_FREE || t->state == NC_T_TERMINATED) {
+            continue;
+        }
+        const int lo = t->priority >= 16 ? 16 : 1, hi = t->priority >= 16 ? 31 : 15;
+        const int p = t->priority + now - old;
+        t->priority = p < lo ? lo : p > hi ? hi : p;
+    }
     k->resched = true;
     return (uint32_t)old;
 }
@@ -1425,6 +1753,21 @@ void nc_ke_register(NcKernel *k)
     nc_kernel_impl(k, "RtlEnterCriticalSection", RtlEnterCriticalSection);
     nc_kernel_impl(k, "RtlLeaveCriticalSection", RtlLeaveCriticalSection);
     nc_kernel_impl(k, "RtlTryEnterCriticalSection", RtlTryEnterCriticalSection);
+    nc_kernel_impl(k, "KeInitializeQueue", KeInitializeQueue);
+    nc_kernel_impl(k, "KeInsertQueue", KeInsertQueue);
+    nc_kernel_impl(k, "KeInsertHeadQueue", KeInsertHeadQueue);
+    nc_kernel_impl(k, "KeRemoveQueue", KeRemoveQueue);
+    nc_kernel_impl(k, "KeRundownQueue", KeRundownQueue);
+    nc_kernel_impl(k, "NtQueryEvent", NtQueryEvent);
+    nc_kernel_impl(k, "NtQueryMutant", NtQueryMutant);
+    nc_kernel_impl(k, "NtQuerySemaphore", NtQuerySemaphore);
+    nc_kernel_impl(k, "KeSetEventBoostPriority", KeSetEventBoostPriority);
+    nc_kernel_impl(k, "KeAlertThread", KeAlertThread);
+    nc_kernel_impl(k, "KiUnlockDispatcherDatabase", KiUnlockDispatcherDatabase);
+    nc_kernel_impl(k, "KeSetPriorityProcess", KeSetPriorityProcess);
+    /* KeEnterCriticalRegion and KeLeaveCriticalRegion do nothing here (STUBS.md) */
+    nc_kernel_impl(k, "RtlEnterCriticalSectionAndRegion", RtlEnterCriticalSection);
+    nc_kernel_impl(k, "RtlLeaveCriticalSectionAndRegion", RtlLeaveCriticalSection);
     nc_kernel_impl(k, "ExInitializeReadWriteLock", ExInitializeReadWriteLock);
     nc_kernel_impl(k, "ExAcquireReadWriteLockExclusive", ExAcquireReadWriteLockExclusive);
     nc_kernel_impl(k, "ExAcquireReadWriteLockShared", ExAcquireReadWriteLockShared);

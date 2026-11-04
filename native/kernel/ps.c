@@ -501,6 +501,69 @@ void nc_ps_terminate_current(NcKernel *k, uint32_t status)
     k->resched = true;
 }
 
+/* ------------------------------------------------ thread notify routines */
+
+/* PsSetCreateThreadNotifyRoutine's routines, in the KPCR's page (a savestate
+ * keeps them): routine(Thread, ThreadId, Create) as a thread is created (in
+ * its creator) and as it ends (in itself). */
+#define NOTIFY_MAX 8
+
+static uint32_t notify_va(const NcKernel *k, unsigned i)
+{
+    return k->kpcr_va + NC_KPCR_THREAD_NOTIFY + 4 * i;
+}
+
+/* The notify routines from ctx[0] on, then: a creation returns ctx[4] (its
+ * status), an exit ends the thread with ctx[4]. ctx: next routine, ETHREAD,
+ * thread ID, Create, status. */
+static uint64_t notify_next(NcKernel *k, NcFrame *f, uint32_t eax, const uint32_t *ctx)
+{
+    for (unsigned i = ctx[0]; i < NOTIFY_MAX; i++) {
+        const uint32_t routine = nc_vm_rd32(k->vm, notify_va(k, i));
+        if (routine) {
+            const uint32_t args[3] = {ctx[1], ctx[2], ctx[3]};
+            const uint32_t next[NC_KCONT_WORDS] = {i + 1, ctx[1], ctx[2], ctx[3], ctx[4]};
+            nc_kernel_callout_cont(k, f, routine, args, 3, 0xFF, NC_KCONT_THREAD_NOTIFY, next);
+            return 0;
+        }
+    }
+    if (!ctx[3]) {
+        nc_ps_terminate_current(k, ctx[4]);
+    }
+    return ctx[4];
+}
+
+/* The running thread ends with status, after the notify routines. */
+static void thread_exit(NcKernel *k, NcFrame *f, uint32_t status)
+{
+    const NcThread *t = k->current;
+    const uint32_t ctx[NC_KCONT_WORDS] = {0, t->ethread, t->id, 0, status};
+    notify_next(k, f, 0, ctx);
+}
+
+void nc_ps_thread_returned(NcKernel *k, NcFrame *f)
+{
+    if (!k->current) {
+        return;
+    }
+    k->call_pop = 0;
+    k->frame = f;
+    k->redirected = false;
+    thread_exit(k, f, NC_STATUS_SUCCESS);
+}
+
+/* PsSetCreateThreadNotifyRoutine(NotifyRoutine): up to 8 */
+static uint64_t PsSetCreateThreadNotifyRoutine(NcKernel *k, NcFrame *f, const uint32_t *a)
+{
+    for (unsigned i = 0; i < NOTIFY_MAX; i++) {
+        if (!nc_vm_rd32(k->vm, notify_va(k, i))) {
+            nc_vm_wr32(k->vm, notify_va(k, i), a[0]);
+            return NC_STATUS_SUCCESS;
+        }
+    }
+    return NC_STATUS_INSUFFICIENT_RESOURCES;
+}
+
 /* PsCreateSystemThreadEx(ThreadHandle, ThreadExtensionSize, KernelStackSize, TlsDataSize,
  *   ThreadId, StartRoutine, StartContext, CreateSuspended, DebuggerThread, SystemRoutine).
  * TLS data sits at the top of the stack. With a SystemRoutine the thread starts in
@@ -540,6 +603,33 @@ static uint64_t PsCreateSystemThreadEx(NcKernel *k, NcFrame *f, const uint32_t *
     nc_log("hakuX-native", "ps: thread %u created: start %08x (%s), stack %08x-%08x, tls %u%s", t->id,
            a[5], a[9] ? "via system routine" : "direct", t->stack_limit, t->stack_base, a[3],
            t->suspend ? ", suspended" : "");
+    const uint32_t ctx[NC_KCONT_WORDS] = {0, t->ethread, t->id, 1, NC_STATUS_SUCCESS};
+    return notify_next(k, f, 0, ctx);
+}
+
+/* PsCreateSystemThread(ThreadHandle, ThreadId, StartRoutine, StartContext, DebuggerThread):
+ * PsCreateSystemThreadEx with the kernel's least stack and no TLS. */
+static uint64_t PsCreateSystemThread(NcKernel *k, NcFrame *f, const uint32_t *a)
+{
+    const uint32_t ex[10] = {a[0], 0, KERNEL_STACK_SIZE, 0, a[1], a[2], a[3], 0, a[4], 0};
+    return PsCreateSystemThreadEx(k, f, ex);
+}
+
+/* PsQueryStatistics(ProcessStatistics) -> { Length (12), ThreadCount, HandleCount } */
+static uint64_t PsQueryStatistics(NcKernel *k, NcFrame *f, const uint32_t *a)
+{
+    if (nc_vm_rd32(k->vm, a[0]) != 12) {
+        return NC_STATUS_INVALID_PARAMETER;
+    }
+    uint32_t threads = 0, handles = 0;
+    for (unsigned i = 0; i < k->threads_hi; i++) {
+        threads += k->threads[i].state != NC_T_FREE && k->threads[i].state != NC_T_TERMINATED;
+    }
+    for (unsigned i = 1; i < NC_MAX_HANDLES; i++) {
+        handles += k->handle_table[i].object != 0;
+    }
+    nc_vm_wr32(k->vm, a[0] + 4, threads);
+    nc_vm_wr32(k->vm, a[0] + 8, handles);
     return NC_STATUS_SUCCESS;
 }
 
@@ -631,11 +721,24 @@ static uint64_t KeResumeThread(NcKernel *k, NcFrame *f, const uint32_t *a)
     return t ? resume(k, t) : 0;
 }
 
+/* KeAlertResumeThread(Thread) -> previous suspend count: alerted (kernel mode), then resumed */
+static uint64_t KeAlertResumeThread(NcKernel *k, NcFrame *f, const uint32_t *a)
+{
+    NcThread *t = nc_ps_thread_of(k, a[0]);
+    if (!t) {
+        return 0;
+    }
+    nc_ke_alert(k, t, 0);
+    return resume(k, t);
+}
+
 /* PsTerminateSystemThread(ExitStatus): never returns. */
 static uint64_t PsTerminateSystemThread(NcKernel *k, NcFrame *f, const uint32_t *a)
 {
     nc_log("hakuX-native", "ps: thread %u exits (%08x)", k->current ? k->current->id : 0, a[0]);
-    nc_ps_terminate_current(k, a[0]);
+    if (k->current) {
+        thread_exit(k, f, a[0]);
+    }
     return 0;
 }
 
@@ -647,6 +750,11 @@ void nc_ps_register(NcKernel *k)
     nc_kernel_impl(k, "NtResumeThread", NtResumeThread);
     nc_kernel_impl(k, "KeSuspendThread", KeSuspendThread);
     nc_kernel_impl(k, "KeResumeThread", KeResumeThread);
+    nc_kernel_impl(k, "KeAlertResumeThread", KeAlertResumeThread);
+    nc_kernel_impl(k, "PsCreateSystemThread", PsCreateSystemThread);
+    nc_kernel_impl(k, "PsQueryStatistics", PsQueryStatistics);
+    nc_kernel_impl(k, "PsSetCreateThreadNotifyRoutine", PsSetCreateThreadNotifyRoutine);
+    nc_kernel_cont(NC_KCONT_THREAD_NOTIFY, notify_next);
 }
 
 /* Every thread for a fault or timeout report: what it is doing or waiting

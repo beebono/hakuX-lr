@@ -143,6 +143,8 @@ add_library(hakux_native STATIC
   kernel/paging.c
   kernel/ex.c
   kernel/rtl.c
+  kernel/rtlstr.c
+  kernel/rtl_text.c
   kernel/seh.c
   kernel/fixups.c
   kernel/x86mmio.c
@@ -150,6 +152,8 @@ add_library(hakux_native STATIC
   kernel/intr.c
   kernel/apc.c
   kernel/io.c
+  kernel/iomgr.c
+  kernel/misc.c
   kernel/xc.c
   kernel/xc_crypto.c
   kernel/kstate.c

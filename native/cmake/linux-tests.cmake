@@ -54,6 +54,11 @@ add_executable(xc-test "${NC_REPO}/tests/native/xc/xc_test.c" "${NC_REPO}/native
 target_include_directories(xc-test PRIVATE "${NC_REPO}")
 add_test(NAME xc-test COMMAND xc-test)
 set_tests_properties(xc-test PROPERTIES TIMEOUT 10)
+# Check the runtime library's string and number conversions and its printf.
+add_executable(rtl-text-test "${NC_REPO}/tests/native/rtl/text_test.c" "${NC_REPO}/native/kernel/rtl_text.c")
+target_include_directories(rtl-text-test PRIVATE "${NC_REPO}")
+add_test(NAME rtl-text-test COMMAND rtl-text-test)
+set_tests_properties(rtl-text-test PROPERTIES TIMEOUT 10)
 # Check disc directory lookup and listing on deep and looping trees.
 add_executable(xdvdfs-test "${NC_REPO}/tests/native/linux/xdvdfs.c")
 target_include_directories(xdvdfs-test PRIVATE "${NC_REPO}")
@@ -79,6 +84,12 @@ if(NC_GUEST_TESTS)
   add_test(NAME linux-boundaries
            COMMAND "${Python3_EXECUTABLE}" "${NC_REPO}/tests/native/linux/check.py" "$<TARGET_FILE_DIR:xboxrun>")
   set_tests_properties(linux-boundaries PROPERTIES TIMEOUT 60)
+  # The kernel's queues, completion ports, IRPs and drivers driven by guest
+  # code (assembled for i386 by the compiler; skipped without ld.lld).
+  add_test(NAME kernel-io
+           COMMAND "${Python3_EXECUTABLE}" "${NC_REPO}/tests/native/linux/kernel_io.py" "$<TARGET_FILE_DIR:xboxrun>"
+                   "${CMAKE_C_COMPILER}")
+  set_tests_properties(kernel-io PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
 endif()
 if(TARGET hakux_libretro)
   # The APU made again in one process (a relaunch), its EP's samples through

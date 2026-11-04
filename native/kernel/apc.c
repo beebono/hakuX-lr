@@ -274,10 +274,10 @@ static uint64_t NtUserIoApcDispatcher(NcKernel *k, NcFrame *f, const uint32_t *a
     return 0;
 }
 
-/* KeTestAlertThread(ProcessorMode) -> alerted: alerts aren't kept. */
+/* KeTestAlertThread(ProcessorMode) -> alerted (KeAlertThread), cleared */
 static uint64_t KeTestAlertThread(NcKernel *k, NcFrame *f, const uint32_t *a)
 {
-    return 0;
+    return nc_ke_test_alert(k, a[0] & 0xff);
 }
 
 void nc_apc_register(NcKernel *k)
