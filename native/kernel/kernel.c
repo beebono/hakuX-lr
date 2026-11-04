@@ -357,6 +357,32 @@ static void install_fast_paths(NcKernel *k, uint8_t *km)
         k->tramp_va[e->ordinal] = NC_KERNEL_VA + off;
         off += (uint32_t)(fast[i].len + 4 + 15) & ~15u;
     }
+    /* KeQuerySystemTime(CurrentTime): KeSystemTime as the Xbox kernel reads
+     * it (KSYSTEM_TIME: LowPart, High1Time, High2Time; High1Time read first,
+     * High2Time after, read again until they match). Every kernel entry and
+     * the clock's millisecond interrupt (clock_thread) keep it current: its
+     * steps are the Xbox's, a millisecond. A title polling it made a kernel
+     * call each time, up to 140000 a second. */
+    const NcKExport *qst = export_named("KeQuerySystemTime"), *kst = export_named("KeSystemTime");
+    if (qst && kst && kst->abi == NC_KABI_DATA) {
+        const uint32_t t = k->data_va[kst->ordinal];
+        uint8_t sys_time[] = {
+            0x8B, 0x4C, 0x24, 0x04,               /* mov ecx, [esp+4]           */
+            0xA1, 0, 0, 0, 0,                     /* again: mov eax, [High1Time] */
+            0x8B, 0x15, 0, 0, 0, 0,               /* mov edx, [LowPart]         */
+            0x3B, 0x05, 0, 0, 0, 0,               /* cmp eax, [High2Time]       */
+            0x75, 0xED,                           /* jne again                  */
+            0x89, 0x11,                           /* mov [ecx], edx             */
+            0x89, 0x41, 0x04,                     /* mov [ecx+4], eax           */
+            0xC2, 0x04, 0x00,                     /* ret 4                      */
+        };
+        nc_wr32(sys_time + 5, t + 4);
+        nc_wr32(sys_time + 11, t);
+        nc_wr32(sys_time + 17, t + 8);
+        memcpy(km + off, sys_time, sizeof(sys_time));
+        k->tramp_va[qst->ordinal] = NC_KERNEL_VA + off;
+        off += (uint32_t)(sizeof(sys_time) + 15) & ~15u;
+    }
     k->code_next = NC_KERNEL_VA + off;
 }
 
