@@ -465,6 +465,113 @@ static uint32_t take(NcKernel *k, const NcThread *t, const NcWait *w, int idx)
     return entry ? entry : (uint32_t)idx;
 }
 
+/* ------------------------------------------------------ priority boosts */
+
+/* A thread's priority is NcThread.priority; its base, KTHREAD.BasePriority,
+ * is the priority the title set. Below 16 (the variable class) the Xbox
+ * kernel raises a thread a wait releases (KiUnwaitThread): to base + the
+ * releaser's increment (EVENT_INCREMENT 1 for NtSetEvent, the caller's for
+ * KeSetEvent, 0 for a timer or a timeout), up to 15, when that is higher,
+ * unless its boosts are disabled (KTHREAD.DisableBoost, the process's) or a
+ * KeBoostPriorityThread boost holds (PriorityDecrement). A thread woken at
+ * its waker's priority so runs first. The boost goes as the thread uses its
+ * quantum (KTHREAD.Quantum, in the process's units, 60): each wake costs 10,
+ * and a quantum used up, or the thread's time slice ending
+ * (nc_ps_slice_end), takes the priority one down towards the base. */
+#define KT_PRIORITY       0x32
+#define KT_QUANTUM_UNITS  0x6C
+#define KT_BASE_PRIORITY  0x70
+#define KT_PRIORITY_DEC   0x72
+#define KT_DISABLE_BOOST  0x73
+#define KP_QUANTUM        0x14
+#define KP_DISABLE_BOOST  0x19
+#define LOW_REALTIME_PRIORITY 16
+#define WAIT_QUANTUM_DECREMENT 10
+
+/* The increment a signal gives the waits it satisfies (signaled_by). */
+static int g_unwait_increment;
+
+static uint8_t *kt_byte(NcKernel *k, const NcThread *t, uint32_t off)
+{
+    return nc_vm_host(k->vm, t->ethread + off);
+}
+
+int nc_ke_base_priority(NcKernel *k, const NcThread *t)
+{
+    return (int8_t)*kt_byte(k, t, KT_BASE_PRIORITY);
+}
+
+static void priority_set(NcKernel *k, NcThread *t, int p)
+{
+    t->priority = p;
+    if (p >= 0 && p < 32) {
+        *kt_byte(k, t, KT_PRIORITY) = (uint8_t)p;
+    }
+}
+
+void nc_ke_priority_init(NcKernel *k, NcThread *t, int priority)
+{
+    priority_set(k, t, priority);
+    if (priority >= 0 && priority < 32) {
+        *kt_byte(k, t, KT_BASE_PRIORITY) = (uint8_t)priority;
+    }
+    *kt_byte(k, t, KT_PRIORITY_DEC) = 0;
+}
+
+static int32_t process_quantum(NcKernel *k)
+{
+    const int32_t q = k->kprocess ? (int32_t)nc_vm_rd32(k->vm, k->kprocess + KP_QUANTUM) : 0;
+    return q > 0 ? q : 60;
+}
+
+static void quantum_refill(NcKernel *k, const NcThread *t)
+{
+    nc_vm_wr32(k->vm, t->ethread + KT_QUANTUM_UNITS, (uint32_t)process_quantum(k));
+}
+
+/* The priority one down, a KeBoostPriorityThread boost gone, not below the base. */
+static void priority_decay(NcKernel *k, NcThread *t)
+{
+    const int base = nc_ke_base_priority(k, t);
+    const int p = t->priority - 1 - (int8_t)*kt_byte(k, t, KT_PRIORITY_DEC);
+    *kt_byte(k, t, KT_PRIORITY_DEC) = 0;
+    priority_set(k, t, p < base ? base : p);
+}
+
+void nc_ke_unwaited(NcKernel *k, NcThread *t, int increment)
+{
+    if (t->priority >= LOW_REALTIME_PRIORITY) {
+        quantum_refill(k, t);
+        return;
+    }
+    const int base = nc_ke_base_priority(k, t);
+    const bool process_off = k->kprocess && *(const uint8_t *)nc_vm_host(k->vm, k->kprocess + KP_DISABLE_BOOST);
+    if (!*kt_byte(k, t, KT_PRIORITY_DEC) && !*kt_byte(k, t, KT_DISABLE_BOOST) && !process_off) {
+        const int p = base + increment;
+        if (p > t->priority) {
+            priority_set(k, t, p < LOW_REALTIME_PRIORITY ? p : LOW_REALTIME_PRIORITY - 1);
+        }
+    }
+    if (base >= 14) {
+        quantum_refill(k, t);
+        return;
+    }
+    int32_t q = (int32_t)nc_vm_rd32(k->vm, t->ethread + KT_QUANTUM_UNITS) - WAIT_QUANTUM_DECREMENT;
+    if (q <= 0) {
+        q = process_quantum(k);
+        priority_decay(k, t);
+    }
+    nc_vm_wr32(k->vm, t->ethread + KT_QUANTUM_UNITS, (uint32_t)q);
+}
+
+void nc_ke_quantum_end(NcKernel *k, NcThread *t)
+{
+    quantum_refill(k, t);
+    if (t->priority < LOW_REALTIME_PRIORITY) {
+        priority_decay(k, t);
+    }
+}
+
 uint64_t nc_ke_check_waits(NcKernel *k)
 {
     const uint64_t now = nc_ke_now_ns();
@@ -478,10 +585,12 @@ uint64_t nc_ke_check_waits(NcKernel *k)
         if (idx >= 0) {
             nc_context_set_gpr(&t->ctx, NC_EAX, take(k, t, &t->wait, idx));
             t->state = NC_T_READY;
+            nc_ke_unwaited(k, t, g_unwait_increment);
         } else if (t->wait.deadline_ns && now >= t->wait.deadline_ns) {
             /* A delay ends successfully; a wait times out. */
             nc_context_set_gpr(&t->ctx, NC_EAX, t->wait.count ? NC_STATUS_TIMEOUT : NC_STATUS_SUCCESS);
             t->state = NC_T_READY;
+            nc_ke_unwaited(k, t, 0);
         } else if (t->wait.deadline_ns && (!earliest || t->wait.deadline_ns < earliest)) {
             earliest = t->wait.deadline_ns;
         }
@@ -490,11 +599,13 @@ uint64_t nc_ke_check_waits(NcKernel *k)
     return earliest;
 }
 
-/* After something was signaled: wake waiters, and let a higher-priority
- * thread that became ready run first. */
-static void signaled(NcKernel *k)
+/* After something was signaled with increment (the waiters' boost): wake
+ * waiters, and let a higher-priority thread that became ready run first. */
+static void signaled(NcKernel *k, int increment)
 {
+    g_unwait_increment = increment;
     nc_ke_check_waits(k);
+    g_unwait_increment = 0;
     for (unsigned i = 0; i < NC_MAX_THREADS; i++) {
         if (k->threads[i].state == NC_T_READY && k->current && k->threads[i].priority > k->current->priority) {
             k->resched = true;
@@ -623,10 +734,11 @@ void nc_ke_block(NcKernel *k)
 
 /* Ends t's nc_ke_block: status in its EAX, ready, ahead of the running
  * thread if its priority is higher. */
-void nc_ke_wake(NcKernel *k, NcThread *t, uint32_t status)
+void nc_ke_wake(NcKernel *k, NcThread *t, uint32_t status, int increment)
 {
     nc_context_set_gpr(&t->ctx, NC_EAX, status);
     t->state = NC_T_READY;
+    nc_ke_unwaited(k, t, increment);
     if (k->current && t->priority > k->current->priority) {
         k->resched = true;
     }
@@ -662,17 +774,17 @@ static void init_header(NcKernel *k, uint32_t obj, uint8_t type, uint8_t size_dw
     nc_vm_wr32(k->vm, obj + HDR_WAIT_LIST + 4, obj + HDR_WAIT_LIST);
 }
 
-static uint32_t set_event(NcKernel *k, uint32_t ev)
+static uint32_t set_event(NcKernel *k, uint32_t ev, int increment)
 {
     int32_t old = signal_state(k, ev);
     set_signal_state(k, ev, 1);
-    signaled(k);
+    signaled(k, increment);
     return (uint32_t)old;
 }
 
-uint32_t nc_ke_set_event(NcKernel *k, uint32_t event)
+uint32_t nc_ke_set_event(NcKernel *k, uint32_t event, int increment)
 {
-    return set_event(k, event);
+    return set_event(k, event, increment);
 }
 
 void nc_ke_clear_event(NcKernel *k, uint32_t event)
@@ -695,7 +807,7 @@ static uint64_t KeInitializeEvent(NcKernel *k, NcFrame *f, const uint32_t *a)
 /* KeSetEvent(Event, Increment, Wait) -> previous state */
 static uint64_t KeSetEvent(NcKernel *k, NcFrame *f, const uint32_t *a)
 {
-    return set_event(k, a[0]);
+    return set_event(k, a[0], (int32_t)a[1]);
 }
 
 /* KeResetEvent(Event) -> previous state */
@@ -709,7 +821,7 @@ static uint64_t KeResetEvent(NcKernel *k, NcFrame *f, const uint32_t *a)
 /* KePulseEvent(Event, Increment, Wait) -> previous state */
 static uint64_t KePulseEvent(NcKernel *k, NcFrame *f, const uint32_t *a)
 {
-    uint32_t old = set_event(k, a[0]);
+    uint32_t old = set_event(k, a[0], (int32_t)a[1]);
     set_signal_state(k, a[0], 0);
     return old;
 }
@@ -733,7 +845,7 @@ static uint64_t NtSetEvent(NcKernel *k, NcFrame *f, const uint32_t *a)
     if (!ev) {
         return NC_STATUS_INVALID_HANDLE;
     }
-    uint32_t old = set_event(k, ev);
+    uint32_t old = set_event(k, ev, 1);
     if (a[1]) {
         nc_vm_wr32(k->vm, a[1], old);
     }
@@ -758,7 +870,7 @@ static uint64_t NtPulseEvent(NcKernel *k, NcFrame *f, const uint32_t *a)
     if (!ev) {
         return NC_STATUS_INVALID_HANDLE;
     }
-    uint32_t old = set_event(k, ev);
+    uint32_t old = set_event(k, ev, 1);
     set_signal_state(k, ev, 0);
     if (a[1]) {
         nc_vm_wr32(k->vm, a[1], old);
@@ -776,7 +888,7 @@ static uint64_t KeInitializeSemaphore(NcKernel *k, NcFrame *f, const uint32_t *a
     return 0;
 }
 
-static uint32_t release_semaphore(NcKernel *k, uint32_t sem, int32_t count, uint32_t *status)
+static uint32_t release_semaphore(NcKernel *k, uint32_t sem, int32_t count, uint32_t *status, int increment)
 {
     int32_t old = signal_state(k, sem);
     int32_t limit = (int32_t)nc_vm_rd32(k->vm, sem + SEMAPHORE_LIMIT);
@@ -785,7 +897,7 @@ static uint32_t release_semaphore(NcKernel *k, uint32_t sem, int32_t count, uint
         return (uint32_t)old;
     }
     set_signal_state(k, sem, old + count);
-    signaled(k);
+    signaled(k, increment);
     *status = NC_STATUS_SUCCESS;
     return (uint32_t)old;
 }
@@ -797,7 +909,7 @@ static uint64_t KeReleaseSemaphore(NcKernel *k, NcFrame *f, const uint32_t *a)
 {
     static bool told;
     uint32_t status;
-    const uint32_t old = release_semaphore(k, a[0], (int32_t)a[2], &status);
+    const uint32_t old = release_semaphore(k, a[0], (int32_t)a[2], &status, (int32_t)a[1]);
     if (status != NC_STATUS_SUCCESS && !told) {
         told = true;
         nc_log("hakuX-native", "ke: KeReleaseSemaphore %08x by %d past its limit %d (count %d): not released",
@@ -827,7 +939,7 @@ static uint64_t NtReleaseSemaphore(NcKernel *k, NcFrame *f, const uint32_t *a)
         return NC_STATUS_INVALID_HANDLE;
     }
     uint32_t status;
-    uint32_t old = release_semaphore(k, sem, (int32_t)a[1], &status);
+    uint32_t old = release_semaphore(k, sem, (int32_t)a[1], &status, 1);
     if (a[2] && status == NC_STATUS_SUCCESS) {
         nc_vm_wr32(k->vm, a[2], old);
     }
@@ -840,13 +952,13 @@ static void init_mutant(NcKernel *k, uint32_t m, bool owned)
     nc_vm_wr32(k->vm, m + MUTANT_OWNER, owned && k->current ? k->current->ethread : 0);
 }
 
-static uint32_t release_mutant(NcKernel *k, uint32_t m)
+static uint32_t release_mutant(NcKernel *k, uint32_t m, int increment)
 {
     int32_t old = signal_state(k, m);
     set_signal_state(k, m, old + 1);
     if (old + 1 > 0) {
         nc_vm_wr32(k->vm, m + MUTANT_OWNER, 0);
-        signaled(k);
+        signaled(k, increment);
     }
     return (uint32_t)old;
 }
@@ -861,7 +973,7 @@ static uint64_t KeInitializeMutant(NcKernel *k, NcFrame *f, const uint32_t *a)
 /* KeReleaseMutant(Mutant, Increment, Abandoned, Wait) -> previous state */
 static uint64_t KeReleaseMutant(NcKernel *k, NcFrame *f, const uint32_t *a)
 {
-    return release_mutant(k, a[0]);
+    return release_mutant(k, a[0], (int32_t)a[1]);
 }
 
 /* NtCreateMutant(MutantHandle, ObjectAttributes, InitialOwner) */
@@ -883,7 +995,7 @@ static uint64_t NtReleaseMutant(NcKernel *k, NcFrame *f, const uint32_t *a)
     if (!m) {
         return NC_STATUS_INVALID_HANDLE;
     }
-    uint32_t old = release_mutant(k, m);
+    uint32_t old = release_mutant(k, m, 1);
     if (a[1]) {
         nc_vm_wr32(k->vm, a[1], old);
     }
@@ -952,7 +1064,7 @@ uint32_t nc_ke_queue_insert(NcKernel *k, uint32_t q, uint32_t entry, bool at_hea
     const int32_t old = signal_state(k, q);
     list_insert(k, q + QUEUE_ENTRIES, entry, at_head);
     set_signal_state(k, q, old + 1);
-    signaled(k);    /* a waiter takes it */
+    signaled(k, 0); /* a waiter takes it */
     return (uint32_t)old;
 }
 
@@ -1085,13 +1197,13 @@ static uint64_t NtSignalAndWaitForSingleObjectEx(NcKernel *k, NcFrame *f, const 
     uint32_t status = NC_STATUS_SUCCESS;
     switch (type) {
     case NC_OB_EVENT:
-        set_event(k, sig);
+        set_event(k, sig, 1);
         break;
     case NC_OB_SEMAPHORE:
-        release_semaphore(k, sig, 1, &status);
+        release_semaphore(k, sig, 1, &status, 1);
         break;
     case NC_OB_MUTANT:
-        release_mutant(k, sig);
+        release_mutant(k, sig, 1);
         break;
     default:
         status = 0xC0000024u;   /* STATUS_OBJECT_TYPE_MISMATCH */
@@ -1120,6 +1232,11 @@ static uint64_t KeDelayExecutionThread(NcKernel *k, NcFrame *f, const uint32_t *
     const uint32_t st = wait(k, NULL, 0, false, a[2], 0, a[1] & 0xff);
     NcThread *cur = k->current;
     if (cur && cur->state == NC_T_RUNNING && !k->redirected) {
+        /* An interval already over: the priority back to the base, as on the Xbox. */
+        if (cur->priority < LOW_REALTIME_PRIORITY) {
+            *kt_byte(k, cur, KT_PRIORITY_DEC) = 0;
+            priority_set(k, cur, nc_ke_base_priority(k, cur));
+        }
         /* A delay that has nothing to wait for (Sleep(0), or one already
          * elapsed) gives the rest of the slice to a ready thread of the same
          * or higher priority, as NT does. */
@@ -1165,6 +1282,9 @@ static uint64_t KeDelayExecutionThread(NcKernel *k, NcFrame *f, const uint32_t *
 /* NtYieldExecution() */
 static uint64_t NtYieldExecution(NcKernel *k, NcFrame *f, const uint32_t *a)
 {
+    if (k->current) {
+        nc_ke_quantum_end(k, k->current); /* as at a quantum's end */
+    }
     nc_ps_yield(k);         /* behind the ready threads of its priority */
     return NC_STATUS_SUCCESS;
 }
@@ -1212,7 +1332,7 @@ static uint64_t RtlLeaveCriticalSection(NcKernel *k, NcFrame *f, const uint32_t 
     }
     nc_vm_wr32(k->vm, cs + CS_OWNER, 0);
     if (lock >= 0) {
-        set_event(k, cs); /* a waiter takes it over */
+        set_event(k, cs, 1); /* a waiter takes it over */
     }
     return 0;
 }
@@ -1313,7 +1433,7 @@ static uint64_t ExReleaseReadWriteLock(NcKernel *k, NcFrame *f, const uint32_t *
             nc_vm_wr32(k->vm, l + RW_READERS_WAIT, 0);
             nc_vm_wr32(k->vm, l + RW_READERS_ENTRY, readers);
             uint32_t status;
-            release_semaphore(k, l + RW_READER_SEM, (int32_t)readers, &status);
+            release_semaphore(k, l + RW_READER_SEM, (int32_t)readers, &status, 1);
             return 0;
         }
     } else {
@@ -1323,7 +1443,7 @@ static uint64_t ExReleaseReadWriteLock(NcKernel *k, NcFrame *f, const uint32_t *
         }
     }
     rw_add(k, l + RW_WRITERS_WAIT, -1);
-    set_event(k, l + RW_WRITER_EVENT);
+    set_event(k, l + RW_WRITER_EVENT, 1);
     return 0;
 }
 
@@ -1403,6 +1523,8 @@ static uint64_t KeSetEventBoostPriority(NcKernel *k, NcFrame *f, const uint32_t 
             if (t->wait.objects[j] == a[0]) {
                 nc_context_set_gpr(&t->ctx, NC_EAX, j);
                 t->state = NC_T_READY;
+                quantum_refill(k, t);
+                nc_ke_unwaited(k, t, 1);
                 if (a[1]) {
                     nc_vm_wr32(k->vm, a[1], t->ethread);
                 }
@@ -1413,7 +1535,7 @@ static uint64_t KeSetEventBoostPriority(NcKernel *k, NcFrame *f, const uint32_t 
             }
         }
     }
-    set_event(k, a[0]);
+    set_event(k, a[0], 1);
     return 0;
 }
 
@@ -1427,7 +1549,7 @@ bool nc_ke_alert(NcKernel *k, NcThread *t, unsigned mode)
         return true;
     }
     if (t->state == NC_T_WAITING && t->wait.alertable) {
-        nc_ke_wake(k, t, STATUS_ALERTED);
+        nc_ke_wake(k, t, STATUS_ALERTED, 2);
     } else {
         *alerted = 1;
     }
@@ -1655,29 +1777,39 @@ static NcThread *thread_arg(NcKernel *k, uint32_t kthread)
 #define KP_BASE_PRIORITY 0x18
 
 /* KeSetBasePriorityThread(Thread, Increment) -> old increment. An increment of
- * +-16 saturates to the top or bottom of the dynamic range. */
+ * +-16 saturates to the top or bottom of the dynamic range. The priority
+ * moves with the base, keeping a wait's boost. */
 static uint64_t KeSetBasePriorityThread(NcKernel *k, NcFrame *f, const uint32_t *a)
 {
     NcThread *t = thread_arg(k, a[0]);
     if (!t) {
         return 0;
     }
-    int old = t->priority - BASE_PRIORITY;
+    const int old = nc_ke_base_priority(k, t);
     int inc = (int32_t)a[1];
     int p = inc >= 16 ? 15 : inc <= -16 ? 1 : BASE_PRIORITY + inc;
-    t->priority = p < 1 ? 1 : p > 31 ? 31 : p;
+    p = p < 1 ? 1 : p > 31 ? 31 : p;
+    int now = p;
+    if (p < LOW_REALTIME_PRIORITY && t->priority < LOW_REALTIME_PRIORITY) {
+        now = t->priority - (int8_t)*kt_byte(k, t, KT_PRIORITY_DEC) + p - old;
+        now = now < p ? p : now >= LOW_REALTIME_PRIORITY ? LOW_REALTIME_PRIORITY - 1 : now;
+    }
+    *kt_byte(k, t, KT_BASE_PRIORITY) = (uint8_t)p;
+    *kt_byte(k, t, KT_PRIORITY_DEC) = 0;
+    priority_set(k, t, now);
     k->resched = true;
-    return (uint32_t)old;
+    return (uint32_t)(old - BASE_PRIORITY);
 }
 
 /* KeQueryBasePriorityThread(Thread) -> increment */
 static uint64_t KeQueryBasePriorityThread(NcKernel *k, NcFrame *f, const uint32_t *a)
 {
     const NcThread *t = thread_arg(k, a[0]);
-    return t ? (uint32_t)(t->priority - BASE_PRIORITY) : 0;
+    return t ? (uint32_t)(nc_ke_base_priority(k, t) - BASE_PRIORITY) : 0;
 }
 
-/* KeSetPriorityThread(Thread, Priority) -> old priority */
+/* KeSetPriorityThread(Thread, Priority) -> old priority. The base goes there
+ * too: a priority set so stays, as this kernel has always kept it. */
 static uint64_t KeSetPriorityThread(NcKernel *k, NcFrame *f, const uint32_t *a)
 {
     NcThread *t = thread_arg(k, a[0]);
@@ -1685,7 +1817,7 @@ static uint64_t KeSetPriorityThread(NcKernel *k, NcFrame *f, const uint32_t *a)
         return 0;
     }
     int old = t->priority;
-    t->priority = (int32_t)a[1];
+    nc_ke_priority_init(k, t, (int32_t)a[1]);
     k->resched = true;
     return (uint32_t)old;
 }
@@ -1703,16 +1835,45 @@ static uint64_t KeSetPriorityProcess(NcKernel *k, NcFrame *f, const uint32_t *a)
             continue;
         }
         const int lo = t->priority >= 16 ? 16 : 1, hi = t->priority >= 16 ? 31 : 15;
-        const int p = t->priority + now - old;
-        t->priority = p < lo ? lo : p > hi ? hi : p;
+        const int p = t->priority + now - old, b = nc_ke_base_priority(k, t) + now - old;
+        priority_set(k, t, p < lo ? lo : p > hi ? hi : p);
+        *kt_byte(k, t, KT_BASE_PRIORITY) = (uint8_t)(b < lo ? lo : b > hi ? hi : b);
     }
     k->resched = true;
     return (uint32_t)old;
 }
 
-/* KeSetDisableBoostThread(Thread, Disable) -> old; KeBoostPriorityThread: no boosts here. */
-static uint64_t KeNoBoost(NcKernel *k, NcFrame *f, const uint32_t *a)
+/* KeSetDisableBoostThread(Thread, Disable) -> old: no wake boosts for it */
+static uint64_t KeSetDisableBoostThread(NcKernel *k, NcFrame *f, const uint32_t *a)
 {
+    NcThread *t = thread_arg(k, a[0]);
+    if (!t) {
+        return 0;
+    }
+    uint8_t *disable = kt_byte(k, t, KT_DISABLE_BOOST);
+    const uint8_t old = *disable;
+    *disable = (uint8_t)(a[1] & 0xFF);
+    return old;
+}
+
+/* KeBoostPriorityThread(Thread, Increment): base + Increment (up to 15) until
+ * its next quantum ends, if that's higher and no such boost holds */
+static uint64_t KeBoostPriorityThread(NcKernel *k, NcFrame *f, const uint32_t *a)
+{
+    NcThread *t = thread_arg(k, a[0]);
+    if (!t || t->priority >= LOW_REALTIME_PRIORITY || *kt_byte(k, t, KT_PRIORITY_DEC)) {
+        return 0;
+    }
+    int p = nc_ke_base_priority(k, t) + (int32_t)a[1];
+    p = p >= LOW_REALTIME_PRIORITY ? LOW_REALTIME_PRIORITY - 1 : p;
+    if (p > t->priority) {
+        *kt_byte(k, t, KT_PRIORITY_DEC) = (uint8_t)(p - t->priority);
+        quantum_refill(k, t);
+        priority_set(k, t, p);
+        if (k->current && t != k->current && t->state == NC_T_READY && p > k->current->priority) {
+            k->resched = true;
+        }
+    }
     return 0;
 }
 
@@ -1796,8 +1957,8 @@ void nc_ke_register(NcKernel *k)
     nc_kernel_impl(k, "KeSetBasePriorityThread", KeSetBasePriorityThread);
     nc_kernel_impl(k, "KeQueryBasePriorityThread", KeQueryBasePriorityThread);
     nc_kernel_impl(k, "KeSetPriorityThread", KeSetPriorityThread);
-    nc_kernel_impl(k, "KeSetDisableBoostThread", KeNoBoost);
-    nc_kernel_impl(k, "KeBoostPriorityThread", KeNoBoost);
+    nc_kernel_impl(k, "KeSetDisableBoostThread", KeSetDisableBoostThread);
+    nc_kernel_impl(k, "KeBoostPriorityThread", KeBoostPriorityThread);
 }
 
 void nc_ke_reset(void)

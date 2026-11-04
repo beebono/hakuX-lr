@@ -200,7 +200,7 @@ static NcThread *thread_create(NcKernel *k, uint32_t stack_size, uint32_t tls_si
     }
     kt[KT_PRIORITY] = DEFAULT_PRIORITY;
     kt[KT_BASE_PRIORITY] = DEFAULT_PRIORITY;
-    nc_vm_wr32(vm, et + KT_QUANTUM, 36);
+    nc_vm_wr32(vm, et + KT_QUANTUM, 60); /* the process's quantum, in its units (nc_ke_unwaited) */
     if (!k->kprocess && (k->kprocess = nc_pool_alloc(k, KPROCESS_SIZE)) != 0) {
         memset(nc_vm_host(vm, k->kprocess), 0, KPROCESS_SIZE);
         list_init(vm, k->kprocess + KP_READY_LIST);
@@ -295,7 +295,7 @@ NcThread *nc_ps_kernel_thread(NcKernel *k, uint32_t stack_size, int priority)
 {
     NcThread *t = thread_create(k, stack_size, 0, 0);
     if (t) {
-        t->priority = priority;
+        nc_ke_priority_init(k, t, priority);
         nc_log("hakuX-native", "ps: kernel thread %u, priority %d, stack %08x-%08x", t->id, priority,
                t->stack_limit, t->stack_base);
     }
@@ -320,6 +320,7 @@ void nc_ps_slice_end(NcKernel *k, uint64_t now)
     if (!cur || cur != k->slice_thread || cur->state != NC_T_RUNNING) {
         return; /* an ISR or a DPC runs: the slice ends once its thread is back */
     }
+    nc_ke_quantum_end(k, cur); /* a wait's boost goes down one */
     for (unsigned i = 0; i < k->threads_hi; i++) {
         const NcThread *t = &k->threads[i];
         if (t != cur && t->state == NC_T_READY && !t->suspend && t->priority >= cur->priority) {

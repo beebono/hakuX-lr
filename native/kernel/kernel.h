@@ -493,8 +493,9 @@ uint32_t nc_mm_contig_alloc(NcKernel *k, uint32_t size);
 
 /* ke.c: time, dispatcher objects and waits. */
 void nc_ke_register(NcKernel *k);
-/* KeSetEvent on a guest event object; returns the previous state. */
-uint32_t nc_ke_set_event(NcKernel *k, uint32_t event);
+/* KeSetEvent on a guest event object with a waiter's boost (increment: an
+ * I/O's completion gives 1); returns the previous state. */
+uint32_t nc_ke_set_event(NcKernel *k, uint32_t event, int increment);
 /* KeClearEvent. */
 void nc_ke_clear_event(NcKernel *k, uint32_t event);
 /* KeInitializeEvent: type 0 notification, 1 synchronization. */
@@ -518,7 +519,15 @@ bool nc_ke_test_alert(NcKernel *k, unsigned mode);
 /* The running thread waits for the host's work for its call (no object, no
  * timeout); nc_ke_wake ends it with the call's status. */
 void nc_ke_block(NcKernel *k);
-void nc_ke_wake(NcKernel *k, NcThread *t, uint32_t status);
+void nc_ke_wake(NcKernel *k, NcThread *t, uint32_t status, int increment);
+/* Priority boosts (ke.c): a thread's base priority (KTHREAD.BasePriority);
+ * its priority and base set together (a new thread's, a kernel thread's);
+ * what a wait's end does to its priority and quantum, with the releaser's
+ * increment (KiUnwaitThread), and its quantum's end (one down to the base). */
+int nc_ke_base_priority(NcKernel *k, const NcThread *t);
+void nc_ke_priority_init(NcKernel *k, NcThread *t, int priority);
+void nc_ke_unwaited(NcKernel *k, NcThread *t, int increment);
+void nc_ke_quantum_end(NcKernel *k, NcThread *t);
 
 /* FILE_OBJECT.Event (a KEVENT): what a wait on a file handle waits for, set
  * when an I/O on the file issued without an event of its own completes. */
@@ -711,8 +720,8 @@ void nc_kernel_stubs_refresh(NcKernel *k);
 /* apc.c: asynchronous procedure calls. */
 void nc_apc_register(NcKernel *k);
 bool nc_apc_pending(const NcThread *t);
-/* Queues an APC to t; one waiting alertably wakes to run it. */
-bool nc_apc_queue(NcKernel *k, NcThread *t, const NcApc *a);
+/* Queues an APC to t; one waiting alertably wakes to run it, boosted by increment. */
+bool nc_apc_queue(NcKernel *k, NcThread *t, const NcApc *a, int increment);
 /* From an alertable wait of the running thread: run its APCs first, then
  * continue at final_eip/final_esp with STATUS_USER_APC. */
 bool nc_apc_begin_frame(NcKernel *k, NcFrame *f, NcThread *t, uint32_t final_esp, uint32_t final_eip);

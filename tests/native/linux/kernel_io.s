@@ -32,6 +32,11 @@
 .set PsSetCreateThreadNotifyRoutine, THUNK + 4*23
 .set KeInsertHeadQueue,            THUNK + 4*24
 .set KeRundownQueue,               THUNK + 4*25
+.set IoSynchronousDeviceIoControlRequest, THUNK + 4*26
+.set KeWaitForSingleObject,        THUNK + 4*27
+.set KeSetEvent,                   THUNK + 4*28
+.set KeSetDisableBoostThread,      THUNK + 4*29
+.set KeQueryBasePriorityThread,    THUNK + 4*30
 
 /* push imm32 (LLVM's Intel syntax makes "push offset sym" a 16-bit push) */
 .macro PUSHI sym
@@ -391,6 +396,117 @@ _start:
     cmp dword ptr [buf], 0x6F2D3234      /* "42-o" */
     jne fail
 
+    /* 10. IoSynchronousDeviceIoControlRequest on the kernel's devices: the
+     * disc's geometry (2048-byte sectors), a partition's (512), an unknown
+     * code refused */
+    STEP 24
+    push 0
+    PUSHI returned
+    push 24
+    PUSHI geometry
+    push 0
+    push 0
+    push dword ptr [cd]
+    push 0x2404C                        /* IOCTL_CDROM_GET_DRIVE_GEOMETRY */
+    call dword ptr [IoSynchronousDeviceIoControlRequest]
+    test eax, eax
+    jnz fail
+    cmp dword ptr [returned], 24
+    jne fail
+    cmp dword ptr [geometry + 20], 2048
+    jne fail
+    cmp dword ptr [geometry], 0
+    je fail
+    STEP 25
+    PUSHI hd
+    push 0
+    push 0
+    push 0
+    PUSHI hdname
+    call dword ptr [ObReferenceObjectByName]
+    test eax, eax
+    jnz fail
+    push 0
+    PUSHI returned
+    push 24
+    PUSHI geometry
+    push 0
+    push 0
+    push dword ptr [hd]
+    push 0x70000                        /* IOCTL_DISK_GET_DRIVE_GEOMETRY */
+    call dword ptr [IoSynchronousDeviceIoControlRequest]
+    test eax, eax
+    jnz fail
+    cmp dword ptr [geometry + 20], 512
+    jne fail
+    STEP 26
+    push 0
+    PUSHI returned
+    push 24
+    PUSHI geometry
+    push 0
+    push 0
+    push dword ptr [cd]
+    push 0x12345678
+    call dword ptr [IoSynchronousDeviceIoControlRequest]
+    cmp eax, 0xC0000010
+    jne fail
+
+    /* 11. priority boosts: a thread woken by KeSetEvent with increment 1 at
+     * its waker's priority runs before the waker goes on, its priority one
+     * up and its base kept; with increment 0, or its boosts disabled, it
+     * waits for its turn */
+    STEP 27
+    PUSHI bev1
+    call start_waiter
+    push 0
+    push 1
+    PUSHI bev1
+    call dword ptr [KeSetEvent]
+    cmp dword ptr [bev1_ran], 1         /* ran already: preempted the waker */
+    jne fail
+    STEP 28
+    mov eax, dword ptr [bev1_thread]
+    cmp byte ptr [eax + 0x32], 9        /* KTHREAD.Priority: 8 + 1 */
+    jne fail
+    push eax
+    call dword ptr [KeQueryBasePriorityThread]
+    test eax, eax                       /* the base's increment: still 0 */
+    jnz fail
+    STEP 29
+    PUSHI bev2
+    call start_waiter
+    push 0
+    push 0
+    PUSHI bev2
+    call dword ptr [KeSetEvent]
+    cmp dword ptr [bev2_ran], 0         /* no boost: the waker goes on */
+    jne fail
+    PUSHI delay
+    push 0
+    push 0
+    call dword ptr [KeDelayExecutionThread]
+    cmp dword ptr [bev2_ran], 1
+    jne fail
+    STEP 30
+    PUSHI bev3
+    call start_waiter
+    push 1
+    push dword ptr [bev3_thread]
+    call dword ptr [KeSetDisableBoostThread]
+    push 0
+    push 1
+    PUSHI bev3
+    call dword ptr [KeSetEvent]
+    cmp dword ptr [bev3_ran], 0         /* boosts disabled */
+    jne fail
+    PUSHI delay
+    push 0
+    push 0
+    call dword ptr [KeDelayExecutionThread]
+    cmp dword ptr [bev3_ran], 1
+    jne fail
+
     PUSHI passed
     call dword ptr [DbgPrint]
     add esp, 4
@@ -416,6 +532,43 @@ new_irp:
     mov dword ptr [ecx + 0x20], 0x55
     mov byte ptr [ecx + 3], 0xE0
     ret
+
+/* start_waiter(block): a new thread that waits on the synchronization event
+ * at block (KEVENT, then the thread's KTHREAD, then 1 once it ran), and the
+ * caller sleeps until it waits */
+start_waiter:
+    mov eax, dword ptr [esp + 4]
+    push 0
+    push 1
+    push eax
+    call dword ptr [KeInitializeEvent]
+    push 0
+    push dword ptr [esp + 8]
+    PUSHI waiter
+    push 0
+    PUSHI hthread
+    call dword ptr [PsCreateSystemThread]
+    test eax, eax
+    jnz fail
+    PUSHI delay
+    push 0
+    push 0
+    call dword ptr [KeDelayExecutionThread]
+    ret 4
+
+waiter:                               /* waiter(block) */
+    mov eax, dword ptr [esp + 4]
+    mov ecx, dword ptr fs:[0x28]
+    mov dword ptr [eax + 0x10], ecx
+    push 0
+    push 0
+    push 0
+    push 0
+    push eax
+    call dword ptr [KeWaitForSingleObject]
+    mov eax, dword ptr [esp + 4]
+    mov dword ptr [eax + 0x14], 1
+    ret 4
 
 worker:                               /* worker(queue) */
     PUSHI e3
@@ -533,6 +686,22 @@ driver:                               /* StartIo, DeleteDevice, Dismount, MajorF
 cdname: .word 14, 15
     .long cdstr
 cdstr: .asciz "\\Device\\CdRom0"
+hd: .long 0
+/* start_waiter's blocks: KEVENT, KTHREAD, ran */
+bev1: .space 0x10
+bev1_thread: .long 0
+bev1_ran: .long 0
+bev2: .space 0x10
+bev2_thread: .long 0
+bev2_ran: .long 0
+bev3: .space 0x10
+bev3_thread: .long 0
+bev3_ran: .long 0
+returned: .long 0
+geometry: .space 24
+hdname: .word 28, 29
+    .long hdstr
+hdstr: .asciz "\\Device\\Harddisk0\\Partition3"
 fmt: .asciz "%d-%s"
 ok: .asciz "ok"
 passed: .asciz "k85: all passed"

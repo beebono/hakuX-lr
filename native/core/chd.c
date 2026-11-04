@@ -168,6 +168,11 @@ static const uint8_t *hunk(NcChd *c, uint32_t i)
     return p;
 }
 
+uint64_t nc_chd_size(const NcChd *c)
+{
+    return c->size;
+}
+
 bool nc_chd_read(NcChd *c, void *buf, size_t len, uint64_t off)
 {
     if (off > c->size || len > c->size - off) {
