@@ -54,6 +54,11 @@ add_executable(xc-test "${NC_REPO}/tests/native/xc/xc_test.c" "${NC_REPO}/native
 target_include_directories(xc-test PRIVATE "${NC_REPO}")
 add_test(NAME xc-test COMMAND xc-test)
 set_tests_properties(xc-test PROPERTIES TIMEOUT 10)
+# Check the runtime library's string and number conversions and its printf.
+add_executable(rtl-text-test "${NC_REPO}/tests/native/rtl/text_test.c" "${NC_REPO}/native/kernel/rtl_text.c")
+target_include_directories(rtl-text-test PRIVATE "${NC_REPO}")
+add_test(NAME rtl-text-test COMMAND rtl-text-test)
+set_tests_properties(rtl-text-test PROPERTIES TIMEOUT 10)
 # Check disc directory lookup and listing on deep and looping trees.
 add_executable(xdvdfs-test "${NC_REPO}/tests/native/linux/xdvdfs.c")
 target_include_directories(xdvdfs-test PRIVATE "${NC_REPO}")
