@@ -190,11 +190,23 @@ static uint64_t ObOpenObjectByPointer(NcKernel *k, NcFrame *f, const uint32_t *a
     return NC_STATUS_SUCCESS;
 }
 
+/* A name in OBJECT_ATTRIBUTES (ObjectName +4), told once: objects aren't
+ * entered in the namespace by name here. */
+static void name_ignored(NcKernel *k, uint32_t attrs, const char *who)
+{
+    /* TODO: a name in ObjectAttributes isn't entered in the namespace */
+    static bool told;
+    if (attrs && nc_vm_rd32(k->vm, attrs + 4) && !told) {
+        told = true;
+        nc_log("hakuX-native", "ob: %s: the object's name is not entered in the namespace", who);
+    }
+}
+
 /* ObCreateObject(ObjectType, ObjectAttributes, ObjectBodySize, Object): a
  * zeroed body of ObjectType, the caller's reference on it */
 static uint64_t ObCreateObject(NcKernel *k, NcFrame *f, const uint32_t *a)
 {
-    /* TODO: a name in ObjectAttributes isn't entered in the namespace */
+    name_ignored(k, a[1], "ObCreateObject");
     const enum NcObType type = type_of_va(k, a[0]);
     const uint32_t obj = nc_ob_create(k, type < NC_OB_TYPES ? type : NC_OB_EVENT, a[2]);
     if (!obj) {
@@ -210,6 +222,7 @@ static uint64_t ObCreateObject(NcKernel *k, NcFrame *f, const uint32_t *a)
 static uint64_t ObInsertObject(NcKernel *k, NcFrame *f, const uint32_t *a)
 {
     const uint32_t hdr = a[0] - OB_HEADER;
+    name_ignored(k, a[1], "ObInsertObject");
     if (a[1] && (nc_vm_rd32(k->vm, a[1] + 8) & 0x10)) { /* OBJ_PERMANENT */
         nc_vm_wr32(k->vm, hdr + 0xC, nc_vm_rd32(k->vm, hdr + 0xC) | 2);
     }

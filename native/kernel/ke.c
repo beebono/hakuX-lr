@@ -934,9 +934,16 @@ void nc_ke_queue_init(NcKernel *k, uint32_t q, uint32_t count)
 static uint32_t queue_take(NcKernel *k, uint32_t q)
 {
     const uint32_t e = nc_vm_rd32(k->vm, q + QUEUE_ENTRIES);
+    const uint32_t cur = nc_vm_rd32(k->vm, q + QUEUE_CURRENT);
+    static bool told;
+    if (cur >= nc_vm_rd32(k->vm, q + QUEUE_MAXIMUM) && !told) {
+        told = true;
+        nc_log("hakuX-native", "ke: queue %08x gives an entry to a thread past its MaximumCount (%u)", q,
+               nc_vm_rd32(k->vm, q + QUEUE_MAXIMUM));
+    }
     list_remove(k, e);
     set_signal_state(k, q, signal_state(k, q) - 1);
-    nc_vm_wr32(k->vm, q + QUEUE_CURRENT, nc_vm_rd32(k->vm, q + QUEUE_CURRENT) + 1);
+    nc_vm_wr32(k->vm, q + QUEUE_CURRENT, cur + 1);
     return e;
 }
 
