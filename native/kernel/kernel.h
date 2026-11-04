@@ -391,6 +391,8 @@ void nc_ex_register(NcKernel *k);
 void nc_rtl_register(NcKernel *k);
 /* rtlstr.c: the runtime library's strings, numbers and formatted output. */
 void nc_rtlstr_register(NcKernel *k);
+/* rtl.c: a pool block for a string's buffer, freed by RtlFree*String (or 0). */
+uint32_t nc_rtl_str_alloc(NcKernel *k, uint32_t size);
 /* misc.c: interlocked lists, port I/O buffers, the debugger's and bug
  * checks' exports. */
 void nc_misc_register(NcKernel *k);
