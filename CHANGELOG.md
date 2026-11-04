@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+## linux-v0.19.1 (Linux, aarch64 and x86-64, and Android)
+
+3D sound is stereo again, and a game that polls the system time no longer
+enters the kernel for each reading.
+
+### Fixes
+
+- **3D sound by ear** — A 3D voice's four HRTF outputs carry the left ear
+  (the first two) and the right ear (the last two), as the game's DSP image
+  mixes them. hakuX took the left ear from the even outputs, so with
+  DirectSound's submix table each ear reached both sides and positional
+  sound was mono: The Thing's gameplay audio had L = R exactly. The Full
+  DSP path also dropped a mono 3D voice's right ear. Every game with 3D
+  sound is affected; The Thing's gameplay now has its stereo width back,
+  at the same level and balance.
+- **System time without a kernel call** — `KeQuerySystemTime` now runs in
+  guest code and reads `KeSystemTime`, as on the Xbox, in its 1 ms steps.
+  The Thing's intro polls it about 140,000 times a second on AMD64 and over
+  400,000 on the Nova, each poll a kernel entry; its kernel entries fell to
+  about 2,100 a second on AMD64 and 14,200 on the Nova, at the same frame
+  rates. `NC_NO_FAST=1` brings the kernel call back for debugging.
+- **Android core link** — The core for RetroArch on Android links AAudio,
+  which the Communicator needs; without it the core didn't link. 0.19.0's
+  Android zip was already built with this fix.
+
+### Testing
+
+The Linux builds pass CI's checks on both architectures; the `kernel-io`
+guest test now also checks the system time. The APU's stereo tests use
+DirectSound's real submix table, with new checks that a voice heard only by
+the left ear stays on the left. The Thing ran with the new system time on
+AMD64 (KVM, RADV) and on the Retroid Pocket Nova (PortareOS, RetroArch) at
+the same frame rates as before. The Android core builds and packages with
+NDK r29 but hasn't run on an Android device.
+
+Savestates load in both directions; a state saved by an older build keeps
+the kernel call for the system time until the next fresh boot.
+
+Implementations: [3D sound by ear](https://github.com/portare-ch/hakuX-lr/pull/91),
+[system time in guest code](https://github.com/portare-ch/hakuX-lr/pull/89),
+[Android AAudio link](https://github.com/portare-ch/hakuX-lr/pull/88).
+
 ## linux-v0.19.0 (Linux, aarch64 and x86-64, and Android)
 
 The Xbox kernel is complete: every one of its 337 functions is implemented,
