@@ -2,6 +2,92 @@
 
 ## Unreleased
 
+## linux-v0.19.0 (Linux, aarch64 and x86-64, and Android)
+
+The Xbox kernel is complete: every one of its 337 functions is implemented,
+so no game stops on a missing one any more. Threads woken by another now run
+first, as on the Xbox. Also the first core for RetroArch on Android
+(experimental) and the fixes from 0.18.1-exp.1 and exp.2.
+
+### What's new
+
+- **Every kernel function** — hakuX implemented 207 of the Xbox kernel's
+  337 functions; a game that called one of the other 130 stopped with
+  `kunimpl`, which the log names. All 337 are there now: the I/O manager's
+  driver model (IRPs, a game's own drivers with their StartIo and
+  completion routines), I/O completion ports and kernel queues, device
+  queues, directory objects, thread notify routines, interlocked lists, the
+  runtime library's strings, numbers and `sprintf`, exceptions and stack
+  walks, and the rest. NBA Inside Drive 2003's memory unit driver and the
+  games that use completion ports had imports this kernel didn't have.
+  Where the Xbox's behaviour isn't fully known or needed, the function is a
+  stub that logs its first call; `native/kernel/STUBS.md` lists them.
+- **Threads woken by another run first** — On the Xbox, a thread released
+  from a wait gets a priority boost (the releaser's increment: 1 for an
+  event set or a semaphore released), so it runs before the thread that
+  woke it. hakuX ignored the boost, and the woken thread waited until the
+  waker blocked or used up its 20 ms time slice. Games hand work between
+  threads this way thousands of times a minute (an event set with that
+  increment, in each game measured); they now take turns as on
+  the console.
+- **RetroArch on Android (experimental, untested)** —
+  `hakux-0.19.0-android-arm64.zip` holds the core for RetroArch on 64-bit
+  Android 9 or newer with a Vulkan 1.2 or newer GPU driver. It hasn't run on
+  an Android device yet. If you try it, please report whether a game
+  starts, with your device, GPU, Android version and the log (`adb logcat`,
+  tags starting with `hakuX`). To install, set **Settings → Drivers →
+  Video** to **vulkan** and restart RetroArch, then choose **Load Core →
+  Install or Restore a Core** and select `hakux_libretro_android.so`; the
+  [README](https://github.com/portare-ch/hakuX-lr/blob/linux-v0.19.0/README.md#play-on-android)
+  has the details. The DSP JIT is Linux-only, so **Audio Processing**
+  defaults to **Fast** on Android.
+
+### Fixes
+
+- **Device I/O requests** — A device control request sent through
+  `IoSynchronousDeviceIoControlRequest` got zeros and success whatever it
+  asked, so a game asking a drive's geometry got 0 bytes per sector. It now
+  goes to the device, which answers as the same request through a file
+  does, and the disc reports its geometry.
+- **Small render targets read by texel** — At a render scale above 1x, a
+  small render-to-texture target (kept at 1x) that a game reads by texel
+  was read from part of its area, stretched. Reported for Sega GT 2002's
+  car skins. From upstream hakuX.
+- **Arm Mali drivers** — From upstream hakuX: on Arm's Mali-G57 driver,
+  W-buffered draws use the rasterizer's depth, avoiding a GPU hang
+  (Morrowind). On Arm's drivers before r40, timeline waits poll the GPU's
+  counter instead of the driver's wait, which lost the device. On Arm's
+  Mali-G52 driver, presents skip the CPU wait and GPU timestamps are off.
+- **Vulkan 1.3 GPUs without descriptor indexing** — The core no longer asks
+  for descriptor-indexing features it doesn't use, which a Vulkan 1.3
+  driver without them refused, so the core couldn't start (ROCKNIX's
+  S922X, Mali-G52). Before creating the device, the core logs the GPU, its
+  driver and each feature it asks for that the GPU lacks.
+
+### Testing
+
+The Linux builds pass CI's checks on both architectures, among them a new
+guest test (`kernel-io`) that drives the kernel's queues, completion ports, a
+game's own driver, IRPs to the disc and the priority boosts, on ARM64 (FEX)
+and AMD64 (KVM). On the Retroid Pocket Nova (PortareOS, RetroArch, on
+screen, 70 s each without input, so title screens and attract modes),
+Burnout 3, Dead or Alive 3, Halo, NBA Inside Drive 2003 and RalliSport
+Challenge ran at the same frame rates with the priority boosts as without
+(59.6, 59.6, 29.8, 30.0 and 30.0 fps), Halo's slowest 5 s at 29.8 fps with
+them against 29.2 without, and nothing stopped. On AMD64 (KVM, RADV) NBA
+Inside Drive 2003, Burnout 3 and Dead or Alive 3 ran at their frame rates
+too. The Android core builds and packages cleanly with the NDK, but hasn't
+run on an Android device.
+
+Savestates from 0.18 load: their threads' priorities become the threads'
+base priorities.
+
+Implementations: [every kernel function](https://github.com/portare-ch/hakuX-lr/pull/86),
+[priority boosts and device I/O requests](https://github.com/portare-ch/hakuX-lr/pull/87),
+[Android core](https://github.com/portare-ch/hakuX-lr/pull/81),
+[upstream fixes](https://github.com/portare-ch/hakuX-lr/pull/80),
+[Vulkan 1.3 without descriptor indexing](https://github.com/portare-ch/hakuX-lr/pull/79).
+
 ## linux-v0.18.1-exp.2 (Linux, aarch64 and x86-64, and Android, experimental)
 
 A first build for RetroArch on Android, untested on devices so far, and
