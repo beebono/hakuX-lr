@@ -70,14 +70,15 @@ The Linux builds pass CI's checks on both architectures, among them a new
 guest test (`kernel-io`) that drives the kernel's queues, completion ports, a
 game's own driver, IRPs to the disc and the priority boosts, on ARM64 (FEX)
 and AMD64 (KVM). On the Retroid Pocket Nova (PortareOS, RetroArch, on
-screen, 70 s each without input, so title screens and attract modes),
-Burnout 3, Dead or Alive 3, Halo, NBA Inside Drive 2003 and RalliSport
-Challenge ran at the same frame rates with the priority boosts as without
-(59.6, 59.6, 29.8, 30.0 and 30.0 fps), Halo's slowest 5 s at 29.8 fps with
-them against 29.2 without, and nothing stopped. On AMD64 (KVM, RADV) NBA
-Inside Drive 2003, Burnout 3 and Dead or Alive 3 ran at their frame rates
-too. The Android core builds and packages cleanly with the NDK, but hasn't
-run on an Android device.
+screen), cores with and without the priority boosts took turns, twice each:
+Dead or Alive 3's warnings and in-engine intro (100 s) ran at 59.6 fps with
+both, and a Project Gotham Racing arcade race (San Francisco, two laps,
+driven by a scripted pad) at 59.6 fps with both, with 2 to 6 stutters of at
+most 34 ms per race either way. (An earlier Nova comparison listed here
+ran the same core on both sides and has been withdrawn.) On AMD64 (KVM,
+RADV) NBA Inside Drive 2003, Burnout 3 and Dead or Alive 3 ran at their
+frame rates with the boosts as without. The Android core builds and
+packages cleanly with the NDK, but hasn't run on an Android device.
 
 Savestates from 0.18 load: their threads' priorities become the threads'
 base priorities.
