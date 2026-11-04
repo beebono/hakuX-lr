@@ -378,6 +378,11 @@ void nc_mm_register(NcKernel *k);
 void nc_mm_note_image(uint32_t base, uint32_t size);
 void nc_ex_register(NcKernel *k);
 void nc_rtl_register(NcKernel *k);
+/* rtlstr.c: the runtime library's strings, numbers and formatted output. */
+void nc_rtlstr_register(NcKernel *k);
+/* misc.c: interlocked lists, port I/O buffers, the debugger's and bug
+ * checks' exports. */
+void nc_misc_register(NcKernel *k);
 /* Room for len bytes of guest code in the kernel area (stubs), or 0. */
 uint32_t nc_kernel_code_alloc(NcKernel *k, uint32_t len);
 
@@ -595,6 +600,8 @@ void nc_dpc_return(NcKernel *k);
 
 /* io.c: files, devices and the object namespace. */
 void nc_io_register(NcKernel *k);
+/* iomgr.c: IRPs, drivers, device queues and I/O completion ports. */
+void nc_iomgr_register(NcKernel *k);
 /* xc.c: crypto exports. */
 void nc_xc_register(NcKernel *k);
 /* Where the hard disk's partitions live on the host (PartitionN under it). */

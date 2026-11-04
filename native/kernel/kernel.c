@@ -502,11 +502,14 @@ bool nc_kernel_init(NcKernel *k, NcVm *vm)
     nc_mm_register(k);
     nc_ex_register(k);
     nc_rtl_register(k);
+    nc_rtlstr_register(k);
+    nc_misc_register(k);
     nc_seh_register(k);
     nc_timer_register(k);
     nc_intr_register(k);
     nc_apc_register(k);
     nc_io_register(k);
+    nc_iomgr_register(k);
     nc_xc_register(k);
 
     /* Data exports read at boot. */
