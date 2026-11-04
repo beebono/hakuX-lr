@@ -32,6 +32,7 @@
 .set PsSetCreateThreadNotifyRoutine, THUNK + 4*23
 .set KeInsertHeadQueue,            THUNK + 4*24
 .set KeRundownQueue,               THUNK + 4*25
+.set IoSynchronousDeviceIoControlRequest, THUNK + 4*26
 
 /* push imm32 (LLVM's Intel syntax makes "push offset sym" a 16-bit push) */
 .macro PUSHI sym
@@ -391,6 +392,62 @@ _start:
     cmp dword ptr [buf], 0x6F2D3234      /* "42-o" */
     jne fail
 
+    /* 10. IoSynchronousDeviceIoControlRequest on the kernel's devices: the
+     * disc's geometry (2048-byte sectors), a partition's (512), an unknown
+     * code refused */
+    STEP 24
+    push 0
+    PUSHI returned
+    push 24
+    PUSHI geometry
+    push 0
+    push 0
+    push dword ptr [cd]
+    push 0x2404C                        /* IOCTL_CDROM_GET_DRIVE_GEOMETRY */
+    call dword ptr [IoSynchronousDeviceIoControlRequest]
+    test eax, eax
+    jnz fail
+    cmp dword ptr [returned], 24
+    jne fail
+    cmp dword ptr [geometry + 20], 2048
+    jne fail
+    cmp dword ptr [geometry], 0
+    je fail
+    STEP 25
+    PUSHI hd
+    push 0
+    push 0
+    push 0
+    PUSHI hdname
+    call dword ptr [ObReferenceObjectByName]
+    test eax, eax
+    jnz fail
+    push 0
+    PUSHI returned
+    push 24
+    PUSHI geometry
+    push 0
+    push 0
+    push dword ptr [hd]
+    push 0x70000                        /* IOCTL_DISK_GET_DRIVE_GEOMETRY */
+    call dword ptr [IoSynchronousDeviceIoControlRequest]
+    test eax, eax
+    jnz fail
+    cmp dword ptr [geometry + 20], 512
+    jne fail
+    STEP 26
+    push 0
+    PUSHI returned
+    push 24
+    PUSHI geometry
+    push 0
+    push 0
+    push dword ptr [cd]
+    push 0x12345678
+    call dword ptr [IoSynchronousDeviceIoControlRequest]
+    cmp eax, 0xC0000010
+    jne fail
+
     PUSHI passed
     call dword ptr [DbgPrint]
     add esp, 4
@@ -533,6 +590,12 @@ driver:                               /* StartIo, DeleteDevice, Dismount, MajorF
 cdname: .word 14, 15
     .long cdstr
 cdstr: .asciz "\\Device\\CdRom0"
+hd: .long 0
+returned: .long 0
+geometry: .space 24
+hdname: .word 28, 29
+    .long hdstr
+hdstr: .asciz "\\Device\\Harddisk0\\Partition3"
 fmt: .asciz "%d-%s"
 ok: .asciz "ok"
 passed: .asciz "k85: all passed"

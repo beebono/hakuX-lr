@@ -607,71 +607,112 @@ static uint64_t IoBuildDeviceIoControlRequest(NcKernel *k, NcFrame *f, const uin
     return irp;
 }
 
-/* IoSynchronousFsdRequest's own event and IoStatusBlock, from the pool. */
+/* A synchronous request's own event and IoStatusBlock, from the pool. */
 #define SYNC_EVENT 0x00
 #define SYNC_IOSB  0x10
 #define SYNC_SIZE  0x18u
 
-static uint64_t sync_done(NcKernel *k, uint32_t block, uint32_t status)
+/* The request ended with status: its IoStatusBlock's Information to
+ * ctx[1] (if given), the block freed. ctx: the block, the place for
+ * Information. */
+static uint64_t sync_done(NcKernel *k, const uint32_t *ctx, uint32_t status)
 {
-    nc_ex_free(k, block);
+    if (ctx[1]) {
+        wr32(k, ctx[1], rd32(k, ctx[0] + SYNC_IOSB + 4));
+    }
+    nc_ex_free(k, ctx[0]);
     return status;
 }
 
-/* IoSynchronousFsdRequest's wait for a pending request ended. */
+/* A synchronous request's wait for a pending IRP ended. */
 static uint64_t sync_waited(NcKernel *k, NcFrame *f, uint32_t eax, const uint32_t *ctx)
 {
-    return sync_done(k, ctx[0], rd32(k, ctx[0] + SYNC_IOSB));
+    return sync_done(k, ctx, rd32(k, ctx[0] + SYNC_IOSB));
 }
 
-/* The driver returned status for IoSynchronousFsdRequest's IRP: a pending
+/* The driver returned status for a synchronous request's IRP: a pending
  * one is waited for. */
 static uint64_t sync_called(NcKernel *k, NcFrame *f, uint32_t status, const uint32_t *ctx)
 {
-    const uint32_t block = ctx[0];
     if (status != NC_STATUS_PENDING) {
-        return sync_done(k, block, status);
+        return sync_done(k, ctx, status);
     }
-    const uint32_t r = nc_ke_wait_one(k, block + SYNC_EVENT);
+    nc_ke_wait_one(k, ctx[0] + SYNC_EVENT);
     if (k->current && k->current->state == NC_T_WAITING) {
         nc_kernel_wait_cont(k, f, NC_KCONT_IRP_WAITED, ctx);
         return 0;
     }
-    (void)r;
-    return sync_done(k, block, rd32(k, block + SYNC_IOSB));
+    return sync_done(k, ctx, rd32(k, ctx[0] + SYNC_IOSB));
+}
+
+/* A synchronous request's block, its event cleared, or 0. */
+static uint32_t sync_block(NcKernel *k)
+{
+    const uint32_t block = nc_ex_alloc(k, SYNC_SIZE);
+    if (block) {
+        nc_ke_init_event(k, block + SYNC_EVENT, 0, false);
+        wr32(k, block + SYNC_IOSB, 0);
+        wr32(k, block + SYNC_IOSB + 4, 0);
+    }
+    return block;
+}
+
+/* Sends irp (built for block's event and IoStatusBlock) to dev and waits for
+ * it; the call returns the status, Information going to returned (if not 0). */
+static uint64_t sync_send(NcKernel *k, NcFrame *f, uint32_t dev, uint32_t irp, uint32_t block, uint32_t returned)
+{
+    const uint32_t ctx[NC_KCONT_WORDS] = {block, returned};
+    wr32(k, irp + IRP_USER_EVENT, block + SYNC_EVENT);
+    irp_thread_link(k, irp, current_ethread(k));
+    uint32_t routine, sp;
+    if (!irp_down(k, f, dev, irp, &routine, &sp)) {
+        return 0;
+    }
+    if (!routine) {
+        /* the kernel's own device (a driver without the major: invalid) */
+        const uint32_t st = rd32(k, dev + DEV_DRIVER) ? STATUS_INVALID_DEVICE_REQUEST : kernel_device(k, dev, irp, sp);
+        wr32(k, irp + IRP_STATUS, st);
+        irp_complete(k, f, irp, st);
+        return k->redirected ? 0 : sync_called(k, f, st, ctx); /* no completion routine on the kernel's own */
+    }
+    const uint32_t args[2] = {dev, irp};
+    nc_kernel_callout_cont(k, f, routine, args, 2, 0xFF, NC_KCONT_IRP_CALLED, ctx);
+    return 0;
 }
 
 /* IoSynchronousFsdRequest(MajorFunction, DeviceObject, Buffer, Length, StartingOffset) -> status:
  * the request built, sent and waited for */
 static uint64_t IoSynchronousFsdRequest(NcKernel *k, NcFrame *f, const uint32_t *a)
 {
-    const uint32_t block = nc_ex_alloc(k, SYNC_SIZE);
+    const uint32_t block = sync_block(k);
     if (!block) {
         return NC_STATUS_INSUFFICIENT_RESOURCES;
     }
-    nc_ke_init_event(k, block + SYNC_EVENT, 0, false);
     const uint32_t irp = build_fsd(k, a[0], a[1], a[2], a[3], a[4], block + SYNC_IOSB);
     if (!irp) {
-        return sync_done(k, block, NC_STATUS_INSUFFICIENT_RESOURCES);
+        nc_ex_free(k, block);
+        return NC_STATUS_INSUFFICIENT_RESOURCES;
     }
-    wr32(k, irp + IRP_USER_EVENT, block + SYNC_EVENT);
-    irp_thread_link(k, irp, current_ethread(k));
-    uint32_t routine, sp;
-    if (!irp_down(k, f, a[1], irp, &routine, &sp)) {
-        return 0;
+    return sync_send(k, f, a[1], irp, block, 0);
+}
+
+/* IoSynchronousDeviceIoControlRequest(IoControlCode, DeviceObject, InputBuffer, InputBufferLength,
+ *   OutputBuffer, OutputBufferLength, ReturnedOutputBufferLength, InternalDeviceIoControl) -> status:
+ * IoBuildDeviceIoControlRequest's IRP, sent and waited for */
+static uint64_t IoSynchronousDeviceIoControlRequest(NcKernel *k, NcFrame *f, const uint32_t *a)
+{
+    const uint32_t block = sync_block(k);
+    if (!block) {
+        return NC_STATUS_INSUFFICIENT_RESOURCES;
     }
-    const uint32_t ctx[NC_KCONT_WORDS] = {block};
-    if (!routine) {
-        /* the kernel's own device (a driver without the major: invalid) */
-        const uint32_t st = rd32(k, a[1] + DEV_DRIVER) ? STATUS_INVALID_DEVICE_REQUEST
-                                                       : kernel_device(k, a[1], irp, sp);
-        wr32(k, irp + IRP_STATUS, st);
-        irp_complete(k, f, irp, st);
-        return k->redirected ? 0 : sync_called(k, f, st, ctx); /* no completion routine on the kernel's own */
+    const uint32_t b[9] = {a[0], a[1], a[2], a[3], a[4], a[5], a[7], 0, block + SYNC_IOSB};
+    const uint32_t irp = (uint32_t)IoBuildDeviceIoControlRequest(k, f, b);
+    if (!irp) {
+        nc_ex_free(k, block);
+        return NC_STATUS_INSUFFICIENT_RESOURCES;
     }
-    const uint32_t args[2] = {a[1], irp};
-    nc_kernel_callout_cont(k, f, routine, args, 2, 0xFF, NC_KCONT_IRP_CALLED, ctx);
-    return 0;
+    irp_thread_unlink(k, irp); /* sync_send links it */
+    return sync_send(k, f, a[1], irp, block, a[6]);
 }
 
 /* --------------------------------------------------------------- StartIo */
@@ -1008,6 +1049,7 @@ void nc_iomgr_register(NcKernel *k)
     nc_kernel_impl(k, "IoBuildSynchronousFsdRequest", IoBuildSynchronousFsdRequest);
     nc_kernel_impl(k, "IoBuildDeviceIoControlRequest", IoBuildDeviceIoControlRequest);
     nc_kernel_impl(k, "IoSynchronousFsdRequest", IoSynchronousFsdRequest);
+    nc_kernel_impl(k, "IoSynchronousDeviceIoControlRequest", IoSynchronousDeviceIoControlRequest);
     nc_kernel_impl(k, "IoStartPacket", IoStartPacket);
     nc_kernel_impl(k, "IoStartNextPacket", IoStartNextPacket);
     nc_kernel_impl(k, "IoStartNextPacketByKey", IoStartNextPacketByKey);

@@ -14,6 +14,7 @@
 #include "native/kernel/kernel.h"
 #include "native/kernel/xc_crypto.h"
 #include "native/core/irq.h"
+#include "native/core/chd.h"
 #include "native/core/xdvdfs.h"
 
 #include <ctype.h>
@@ -2498,6 +2499,7 @@ static uint32_t disk_ioctl(const NcFile *nf, uint32_t code, uint8_t *out, uint32
  * Orta, XDK 4928): CDFValid, PartitionArea 1, Authentication. Other commands
  * read zeros. */
 #define IOCTL_SCSI_PASS_THROUGH_DIRECT 0x4D014u
+#define IOCTL_CDROM_GET_DRIVE_GEOMETRY 0x2404Cu
 
 /* READ DVD STRUCTURE, format 0 at address FF02FDFF (layer FE), asks for the
  * disc's security sector, returned after a 4-byte header. A real drive reads
@@ -2606,20 +2608,6 @@ static uint64_t NtControlFile(NcKernel *k, NcFrame *f, const uint32_t *a)
     io_status(k, a[4], status, info);
     complete(k, a);
     return status;
-}
-
-/* IoSynchronousDeviceIoControlRequest(IoControlCode, DeviceObject, InputBuffer, InputBufferLength,
- *   OutputBuffer, OutputBufferLength, ReturnedOutputBufferLength, InternalDeviceIoControl) */
-static uint64_t IoSynchronousDeviceIoControlRequest(NcKernel *k, NcFrame *f, const uint32_t *a)
-{
-    nc_log("hakuX-native-io", "device control %08x on device %08x (out %u)", a[0], a[1], a[5]);
-    if (a[4] && a[5]) {
-        memset(nc_vm_host(k->vm, a[4]), 0, a[5]);
-    }
-    if (a[6]) {
-        nc_vm_wr32(k->vm, a[6], 0);
-    }
-    return NC_STATUS_SUCCESS;
 }
 
 /* -------------------------------------------------------- symbolic links */
@@ -2885,10 +2873,42 @@ uint32_t nc_io_device_irp(NcKernel *k, uint32_t dev, uint32_t irp, uint32_t sp, 
             volume.kind = F_VOLUME;
             volume.partition = part;
             *info = disk_ioctl(&volume, code, buf ? nc_vm_host(k->vm, buf) : NULL, buf ? out_len : 0, &status);
+        } else if (part == -1 && code == IOCTL_CDROM_GET_DRIVE_GEOMETRY) {
+            /* DISK_GEOMETRY: Cylinders, MediaType (RemovableMedia), TracksPerCylinder,
+             * SectorsPerTrack, BytesPerSector; the game partition's sectors */
+            if (!buf || out_len < 24) {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+            uint8_t *o = nc_vm_host(k->vm, buf);
+            uint64_t sectors = 0, bytes = 0;
+            struct stat st;
+            if (k->disc && k->disc->chd) {
+                bytes = nc_chd_size(k->disc->chd);
+            } else if (k->disc && k->disc->fd >= 0 && fstat(k->disc->fd, &st) == 0) {
+                bytes = (uint64_t)st.st_size;
+            }
+            if (k->disc && bytes > k->disc->part_off) {
+                sectors = (bytes - k->disc->part_off) / DISC_SECTOR;
+            }
+            put64(o, sectors);
+            nc_wr32(o + 8, 11); /* RemovableMedia */
+            nc_wr32(o + 12, 1);
+            nc_wr32(o + 16, 1);
+            nc_wr32(o + 20, DISC_SECTOR);
+            *info = 24;
         } else if (code == IOCTL_SCSI_PASS_THROUGH_DIRECT) {
             scsi_pass_through(k, nc_vm_rd32(k->vm, sp + 8), nc_vm_rd32(k->vm, sp + 0xC));
         } else if (code != FSCTL_LOCK_VOLUME && code != FSCTL_UNLOCK_VOLUME && code != FSCTL_DISMOUNT_VOLUME) {
-            nc_log("hakuX-native-io", "irp control %08x on %s: not known here (invalid device request)", code, path);
+            static uint32_t told[16];
+            unsigned i = 0;
+            while (i < 16 && told[i] && told[i] != code) {
+                i++;
+            }
+            if (i < 16 && !told[i]) {
+                told[i] = code;
+                nc_log("hakuX-native-io", "irp control %08x on %s: not known here (invalid device request)", code,
+                       path);
+            }
             status = STATUS_INVALID_DEVICE_REQUEST;
         }
         return status;
@@ -3181,7 +3201,6 @@ void nc_io_register(NcKernel *k)
     nc_kernel_impl(k, "NtFlushBuffersFile", NtFlushBuffersFile);
     nc_kernel_impl(k, "NtFsControlFile", NtControlFile);
     nc_kernel_impl(k, "NtDeviceIoControlFile", NtControlFile);
-    nc_kernel_impl(k, "IoSynchronousDeviceIoControlRequest", IoSynchronousDeviceIoControlRequest);
     nc_kernel_impl(k, "IoCreateSymbolicLink", IoCreateSymbolicLink);
     nc_kernel_impl(k, "IoDeleteSymbolicLink", IoDeleteSymbolicLink);
     nc_kernel_impl(k, "NtOpenSymbolicLinkObject", NtOpenSymbolicLinkObject);
