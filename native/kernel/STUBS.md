@@ -18,7 +18,6 @@ lists them over a census, `tools/native/census.sh`.)
 | `FscSetCacheSize`, `FscInvalidateIdleBlocks` | nothing | No file-system cache of its own: the host's page cache serves the disc and the drives. |
 | `NtProtectVirtualMemory`, `MmSetAddressProtect` | recorded, not enforced | Guest memory has no per-page protection; `NtQueryVirtualMemory` reports what was set. |
 | `MmUnmapIoSpace` | nothing | I/O space is never mapped. |
-| `KeBoostPriorityThread`, `KeSetDisableBoostThread` | 0 | The scheduler has no priority boosts. |
 | `KeEnterCriticalRegion`, `KeLeaveCriticalRegion` | nothing | APCs are delivered only in alertable waits, never into a region. |
 | `KeSaveFloatingPointState`, `KeRestoreFloatingPointState` | success | A thread's FPU state stays as it is across kernel calls. |
 | `XcCryptService`, `XcUpdateCrypto` | 0, logged | No replaceable crypto vector. |

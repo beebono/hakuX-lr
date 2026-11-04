@@ -16,7 +16,7 @@ import tempfile
 HERE = Path(__file__).resolve().parent
 # the kernel ordinals kernel_io.s calls, in its thunk order
 IMPORTS = [8, 111, 117, 136, 254, 191, 227, 223, 212, 65, 59, 86, 87, 83, 81, 72, 74, 247, 85, 62, 108, 99, 362,
-           257, 116, 141, 84]
+           257, 116, 141, 84, 159, 145, 144, 124]
 
 
 def tool(*names):

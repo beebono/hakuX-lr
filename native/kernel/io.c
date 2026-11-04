@@ -605,7 +605,7 @@ static void complete(NcKernel *k, const uint32_t *a)
     if (a[1]) {
         uint32_t ev = nc_ob_lookup(k, a[1], NULL);
         if (ev) {
-            nc_ke_set_event(k, ev);
+            nc_ke_set_event(k, ev, 1);
         }
     } else {
         /* no event of its own: the file object's, which a wait on the file
@@ -614,12 +614,12 @@ static void complete(NcKernel *k, const uint32_t *a)
         enum NcObType type;
         const uint32_t fo = nc_ob_lookup(k, a[0], &type);
         if (fo && type == NC_OB_FILE) {
-            nc_ke_set_event(k, fo + NC_FO_EVENT);
+            nc_ke_set_event(k, fo + NC_FO_EVENT, 1);
         }
     }
     if (a[2] && k->current) {
         const NcApc apc = {.normal = a[2], .ctx = a[3], .a1 = a[4], .a2 = 0};
-        nc_apc_queue(k, k->current, &apc);
+        nc_apc_queue(k, k->current, &apc, 1);
     } else if (a[3] && a[4]) {
         /* a file with a completion port gets the I/O's completion there */
         enum NcObType type;
@@ -928,15 +928,15 @@ static void disc_read_done(NcKernel *k, const DiscJob *j)
     }
     io_status(k, j->iosb, st, n);
     if (j->event) {
-        nc_ke_set_event(k, j->event);
+        nc_ke_set_event(k, j->event, 1);
     }
     if (j->sync && j->thread && j->thread->id == j->thread_id && j->thread->state == NC_T_WAITING) {
-        nc_ke_wake(k, j->thread, st);   /* its NtReadFile returns now */
+        nc_ke_wake(k, j->thread, st, 1);   /* its NtReadFile returns now */
     }
     if (j->apc && j->thread && j->thread->id == j->thread_id && j->thread->state != NC_T_FREE &&
         j->thread->state != NC_T_TERMINATED) {
         const NcApc apc = {.normal = j->apc, .ctx = j->apc_ctx, .a1 = j->iosb, .a2 = 0};
-        nc_apc_queue(k, j->thread, &apc);
+        nc_apc_queue(k, j->thread, &apc, 1);
     } else if (!j->apc && j->apc_ctx && j->fo) {
         nc_iomgr_file_post(k, j->fo, j->apc_ctx, st, n);
     }
