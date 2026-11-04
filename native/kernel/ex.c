@@ -51,6 +51,8 @@ static uint32_t pool_alloc(NcKernel *k, uint32_t size)
     return p + POOL_HDR;
 }
 
+static uint64_t ExFreePool(NcKernel *k, NcFrame *f, const uint32_t *a);
+
 /* ExAllocatePool(NumberOfBytes) */
 static uint64_t ExAllocatePool(NcKernel *k, NcFrame *f, const uint32_t *a)
 {
@@ -61,6 +63,17 @@ static uint64_t ExAllocatePool(NcKernel *k, NcFrame *f, const uint32_t *a)
 static uint64_t ExAllocatePoolWithTag(NcKernel *k, NcFrame *f, const uint32_t *a)
 {
     return pool_alloc(k, a[0]);
+}
+
+uint32_t nc_ex_alloc(NcKernel *k, uint32_t size)
+{
+    return pool_alloc(k, size);
+}
+
+void nc_ex_free(NcKernel *k, uint32_t p)
+{
+    const uint32_t a[1] = {p};
+    ExFreePool(k, NULL, a);
 }
 
 /* ExFreePool(P) */

@@ -74,7 +74,7 @@ typedef uint64_t (*NcKFn)(NcKernel *k, NcFrame *f, const uint32_t *args);
 
 /* Guest object types: the VA of the kernel's type-object data export. */
 enum NcObType { NC_OB_THREAD, NC_OB_EVENT, NC_OB_SEMAPHORE, NC_OB_MUTANT, NC_OB_TIMER, NC_OB_FILE,
-                NC_OB_DEVICE, NC_OB_SYMLINK, NC_OB_DIRECTORY, NC_OB_TYPES };
+                NC_OB_DEVICE, NC_OB_SYMLINK, NC_OB_DIRECTORY, NC_OB_IO_COMPLETION, NC_OB_TYPES };
 
 #define NC_MAX_THREADS 128
 /* The Xbox kernel's handle table grows as it fills. Super Monkey Ball
@@ -379,6 +379,9 @@ static inline uint32_t nc_ps_frame_top(const NcThread *t)
     return t->frame_top ? t->frame_top : t->stack_base;
 }
 
+/* ex.c: ExAllocatePool and ExFreePool. */
+uint32_t nc_ex_alloc(NcKernel *k, uint32_t size);
+void nc_ex_free(NcKernel *k, uint32_t p);
 /* mm.c, ex.c, rtl.c */
 void nc_mm_register(NcKernel *k);
 void nc_mm_note_image(uint32_t base, uint32_t size);
@@ -624,6 +627,11 @@ void nc_dpc_return(NcKernel *k);
 void nc_io_register(NcKernel *k);
 /* iomgr.c: IRPs, drivers, device queues and I/O completion ports. */
 void nc_iomgr_register(NcKernel *k);
+/* FileCompletionInformation: file object fo's completion port (a handle) and key. */
+uint32_t nc_iomgr_file_port(NcKernel *k, uint32_t fo, uint32_t port_handle, uint32_t key);
+/* An I/O on fo completed: with a completion port and an ApcContext, a packet
+ * for NtRemoveIoCompletion. */
+void nc_iomgr_file_post(NcKernel *k, uint32_t fo, uint32_t apc_ctx, uint32_t status, uint32_t info);
 /* xc.c: crypto exports. */
 void nc_xc_register(NcKernel *k);
 /* Where the hard disk's partitions live on the host (PartitionN under it). */
@@ -646,6 +654,9 @@ void nc_io_set_launch_dir(const char *dir);
 void nc_io_set_device_time(bool on);
 /* A file object's handle closed (ob.c). */
 void nc_io_close(NcKernel *k, uint32_t object);
+/* An IRP to one of the kernel's own devices (no driver): done in the call;
+ * the status, *info the bytes moved (iomgr.c's IofCallDriver). */
+uint32_t nc_io_device_irp(NcKernel *k, uint32_t dev, uint32_t irp, uint32_t sp, uint32_t *info);
 /* Completes the overlapped disc reads the reader thread finished (cheap when
  * none did): on every kernel entry and in the scheduler's loop. */
 void nc_io_poll(NcKernel *k);

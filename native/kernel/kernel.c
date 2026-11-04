@@ -511,11 +511,20 @@ bool nc_kernel_init(NcKernel *k, NcVm *vm)
         [NC_OB_SEMAPHORE] = "ExSemaphoreObjectType", [NC_OB_MUTANT] = "ExMutantObjectType",
         [NC_OB_TIMER] = "ExTimerObjectType",         [NC_OB_FILE] = "IoFileObjectType",
         [NC_OB_DEVICE] = "IoDeviceObjectType",       [NC_OB_SYMLINK] = "ObSymbolicLinkObjectType",
-        [NC_OB_DIRECTORY] = "ObDirectoryObjectType",
+        [NC_OB_DIRECTORY] = "ObDirectoryObjectType",  [NC_OB_IO_COMPLETION] = "IoCompletionObjectType",
+    };
+    /* OBJECT_TYPE's PoolTag (+0x18), which NtQueryDirectoryObject reports */
+    static const char type_tags[NC_OB_TYPES][5] = {
+        [NC_OB_THREAD] = "Thre", [NC_OB_EVENT] = "Even", [NC_OB_SEMAPHORE] = "Sema", [NC_OB_MUTANT] = "Muta",
+        [NC_OB_TIMER] = "Time",  [NC_OB_FILE] = "File",  [NC_OB_DEVICE] = "Devi",    [NC_OB_SYMLINK] = "Symb",
+        [NC_OB_DIRECTORY] = "Dire", [NC_OB_IO_COMPLETION] = "Comp",
     };
     for (unsigned i = 0; i < NC_OB_TYPES; i++) {
         const NcKExport *e = export_named(type_names[i]);
         k->type_va[i] = e ? k->data_va[e->ordinal] : 0;
+        if (k->type_va[i]) {
+            memcpy(nc_vm_host(vm, k->type_va[i] + 0x18), type_tags[i], 4);
+        }
     }
 
     nc_ob_register(k);
