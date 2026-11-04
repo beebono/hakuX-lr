@@ -951,7 +951,12 @@ static uint64_t HalInitiateShutdown(NcKernel *k, NcFrame *f, const uint32_t *a)
     return 0;
 }
 
-/* HalReadSMBusValue(Address, Command, ReadWord, DataValue): SMC version, tray, AV pack. */
+/* The SMC's scratch register (0x1B), which the system controller keeps for
+ * the kernel and the dashboard. */
+#define SMC_SCRATCH 0x1Bu
+static uint32_t g_smc_scratch;
+
+/* HalReadSMBusValue(Address, Command, ReadWord, DataValue): SMC version, tray, AV pack, scratch. */
 static uint64_t HalReadSMBusValue(NcKernel *k, NcFrame *f, const uint32_t *a)
 {
     static const char version[3] = {'P', '0', '1'};
@@ -962,12 +967,30 @@ static uint64_t HalReadSMBusValue(NcKernel *k, NcFrame *f, const uint32_t *a)
         case 0x01: v = (uint8_t)version[version_idx++ % 3]; break;
         case 0x03: v = k->disc && k->disc->fd >= 0 ? 0x60 : 0x40; break; /* tray closed, media present or not */
         case 0x04: v = av_pack_smc(); break; /* the AV pack, as the TV encoder reports it */
+        case SMC_SCRATCH: v = g_smc_scratch; break;
         default: break;
         }
     }
     if (a[3]) {
         nc_vm_wr32(k->vm, a[3], v);
     }
+    return NC_STATUS_SUCCESS;
+}
+
+/* HalWriteSMBusValue(Address, Command, WriteWord, DataValue): the SMC's scratch
+ * register keeps what is written to it; the rest is ignored. */
+static uint64_t HalWriteSMBusValue(NcKernel *k, NcFrame *f, const uint32_t *a)
+{
+    if ((a[0] & 0xFE) == 0x20 && (uint8_t)a[1] == SMC_SCRATCH) {
+        g_smc_scratch = a[2] & 0xFF ? a[3] & 0xFFFF : a[3] & 0xFF;
+    }
+    return NC_STATUS_SUCCESS;
+}
+
+/* HalWriteSMCScratchRegister(ScratchRegister): the SMC's scratch register */
+static uint64_t HalWriteSMCScratchRegister(NcKernel *k, NcFrame *f, const uint32_t *a)
+{
+    g_smc_scratch = a[0] & 0xFF;
     return NC_STATUS_SUCCESS;
 }
 
@@ -1110,7 +1133,8 @@ void nc_ex_register(NcKernel *k)
     nc_kernel_impl(k, "HalReturnToFirmware", HalReturnToFirmware);
     nc_kernel_impl(k, "HalInitiateShutdown", HalInitiateShutdown);
     nc_kernel_impl(k, "HalReadSMBusValue", HalReadSMBusValue);
-    nc_kernel_impl(k, "HalWriteSMBusValue", HalNothing);
+    nc_kernel_impl(k, "HalWriteSMBusValue", HalWriteSMBusValue);
+    nc_kernel_impl(k, "HalWriteSMCScratchRegister", HalWriteSMCScratchRegister);
     nc_kernel_impl(k, "HalReadSMCTrayState", HalReadSMCTrayState);
     nc_kernel_impl(k, "HalEnableSecureTrayEject", HalNothing);     /* the tray never opens */
     nc_kernel_impl(k, "FscGetCacheSize", FscGetCacheSize);
@@ -1129,4 +1153,5 @@ void nc_ex_reset(void)
     memset(g_eeprom, 0, sizeof(g_eeprom));
     g_eeprom_ready = false;     /* the next title reads it again, with the front end's settings */
     g_av_saved = 0;
+    g_smc_scratch = 0;
 }
