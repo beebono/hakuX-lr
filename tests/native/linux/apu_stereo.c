@@ -272,24 +272,30 @@ static void test_2d_route_saved(void)
     apu_down();
 }
 
-/* A 3D voice through DirectSound's 3D bins (its HRTF submixes 6 to 9,
- * crosstalk front left, front right, back left, back right): its ears by
- * its sends, the front pair at 0 dB, the back pair at -3 dB, as the guest
- * DSP image puts them on a stereo console; the HRTF filter off, or on with
- * an entry that passes its input (tap 0 both ears); the HRTF headroom
- * (before, the monitor's mix: its loudest send's gain on both channels) */
+/* DirectSound's HRTF submixes, as Dead or Alive 3 and The Thing set them:
+ * the VP's HRTF outputs 0 to 3 into 3D front left, back left, front right
+ * and back right (bins 6, 8, 7, 9) */
+#define DS_HRTF_SUBMIXES (6 | 8 << 8 | 7 << 16 | 9 << 24)
+
+/* A 3D voice through DirectSound's 3D bins (its HRTF submixes, crosstalk
+ * front left, back left, front right, back right): its ears by its sends,
+ * the left ear the first two and the right ear the last two, the front
+ * pair at 0 dB, the back pair at -3 dB, as the guest DSP image puts them on
+ * a stereo console; the HRTF filter off, or on with an entry that passes
+ * its input (tap 0 both ears); the HRTF headroom (before, the monitor's
+ * mix: its loudest send's gain on both channels) */
 static void test_3d(void)
 {
     const float k = 0.70710678f;
     for (int hrtf = 0; hrtf < 2; hrtf++) {
         apu_up(false, hrtf, 1);
         pcm_page(0, false, HALF, 0);
-        pio(NV1BA0_PIO_SET_HRTF_SUBMIXES, 6 | 7 << 8 | 8 << 16 | 9 << 24);
+        pio(NV1BA0_PIO_SET_HRTF_SUBMIXES, DS_HRTF_SUBMIXES);
         pio(NV1BA0_PIO_SET_CURRENT_HRTF_ENTRY, 5);
         pio(NV1BA0_PIO_SET_HRIR, 127 | 127 << 8);   /* taps 0: 127/128, normalized to 1 */
         Voice v = voice(7, NV1BA0_PIO_SET_ANTECEDENT_VOICE_LIST_3D_TOP, false, 0);
         v.vol[0] = 0;               /* left ear to 3D front left, 0 dB */
-        v.vol[1] = 0x300;           /* right ear to 3D front right, -12 dB */
+        v.vol[2] = 0x300;           /* right ear to 3D front right, -12 dB */
         v.hrtf = 5;
         start(&v);
         frames(hrtf ? 40 : 4);
@@ -299,11 +305,27 @@ static void test_3d(void)
         apu_down();
     }
 
+    /* an entry that hears the source with the left ear only (the right
+     * ear's taps 0): left 0.5, right exactly 0. The left ear taken from the
+     * even slots put it on both speakers, the same sound on each */
     apu_up(false, true, 1);
     pcm_page(0, false, HALF, 0);
-    pio(NV1BA0_PIO_SET_HRTF_SUBMIXES, 6 | 7 << 8 | 8 << 16 | 9 << 24);
+    pio(NV1BA0_PIO_SET_HRTF_SUBMIXES, DS_HRTF_SUBMIXES);
+    pio(NV1BA0_PIO_SET_CURRENT_HRTF_ENTRY, 5);
+    pio(NV1BA0_PIO_SET_HRIR, 127);              /* left tap 0 only */
     Voice v = voice(7, NV1BA0_PIO_SET_ANTECEDENT_VOICE_LIST_3D_TOP, false, 0);
-    v.vol[2] = v.vol[3] = 0;    /* behind the listener: the back pair, 0 dB */
+    v.vol[0] = v.vol[2] = 0;    /* the front pair, 0 dB */
+    v.hrtf = 5;
+    start(&v);
+    frames(40);
+    check(all(0, pcm(0.5f), 1) && all(1, 0, 0), "3D voice heard by the left ear only: left 0.5, right exactly 0");
+    apu_down();
+
+    apu_up(false, true, 1);
+    pcm_page(0, false, HALF, 0);
+    pio(NV1BA0_PIO_SET_HRTF_SUBMIXES, DS_HRTF_SUBMIXES);
+    v = voice(7, NV1BA0_PIO_SET_ANTECEDENT_VOICE_LIST_3D_TOP, false, 0);
+    v.vol[1] = v.vol[3] = 0;    /* behind the listener: the back pair, 0 dB */
     start(&v);
     frames(4);
     check(all(0, pcm(0.5f * k), 1) && all(1, pcm(0.5f * k), 1), "3D voice behind the listener: -3 dB on both sides");
@@ -311,11 +333,11 @@ static void test_3d(void)
 
     apu_up(false, true, 1);
     pcm_page(0, false, HALF, 0);
-    pio(NV1BA0_PIO_SET_HRTF_SUBMIXES, 6 | 7 << 8 | 8 << 16 | 9 << 24);
+    pio(NV1BA0_PIO_SET_HRTF_SUBMIXES, DS_HRTF_SUBMIXES);
     pio(NV1BA0_PIO_SET_HRTF_HEADROOM, 1);
     pio(NV1BA0_PIO_SET_SUBMIX_HEADROOM + 4 * 6, 3);  /* not the 3D sends' */
     v = voice(7, NV1BA0_PIO_SET_ANTECEDENT_VOICE_LIST_3D_TOP, false, 0);
-    v.vol[0] = v.vol[1] = 0;
+    v.vol[0] = v.vol[2] = 0;
     start(&v);
     frames(4);
     check(all(0, pcm(0.25f), 1) && all(1, pcm(0.25f), 1), "3D voice's HRTF sends at the HRTF headroom (/ 2)");
@@ -359,6 +381,30 @@ static void test_full_dsp(void)
         bins &= fabsf(g_mixbins[0][i] - 0.5f) < 1e-4f && fabsf(g_mixbins[1][i] - 0.5f * attenuation(0x300)) < 1e-4f;
     }
     check(bins && all(0, 0, 0) && all(1, 0, 0), "full-DSP monitor: mix bins by send, monitor output untouched");
+    apu_down();
+
+    /* a mono 3D voice heard by the left ear only: the left ear into its
+     * sends to 3D front left and back left, the right ear (silent) into
+     * front right and back right. Its right ear was lost (each send took
+     * channel slot % 1, the left ear) */
+    apu_up(true, true, 1);
+    pcm_page(0, false, HALF, 0);
+    pio(NV1BA0_PIO_SET_HRTF_SUBMIXES, DS_HRTF_SUBMIXES);
+    pio(NV1BA0_PIO_SET_CURRENT_HRTF_ENTRY, 5);
+    pio(NV1BA0_PIO_SET_HRIR, 127);              /* left tap 0 only */
+    v = voice(7, NV1BA0_PIO_SET_ANTECEDENT_VOICE_LIST_3D_TOP, false, 0);
+    for (int b = 0; b < 4; b++) {
+        v.vol[b] = 0;
+    }
+    v.hrtf = 5;
+    start(&v);
+    frames(40);
+    bins = true;
+    for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
+        bins &= fabsf(g_mixbins[6][i] - 0.5f) < 1e-3f && fabsf(g_mixbins[8][i] - 0.5f) < 1e-3f &&
+                g_mixbins[7][i] == 0.0f && g_mixbins[9][i] == 0.0f;
+    }
+    check(bins, "full-DSP monitor: a mono 3D voice's left ear in the left 3D bins, its right ear in the right");
     apu_down();
 }
 
