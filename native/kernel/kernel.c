@@ -1347,7 +1347,7 @@ static void kcall(NcKernel *k, NcFrame *f, unsigned ordinal)
         /* As the kernel's thread startup does when the start routine returns. */
         nc_log("hakuX-native", "ps: thread %u start routine returned (eax=%08x)",
                k->current ? k->current->id : 0, nc_frame_gpr(f, NC_EAX));
-        nc_ps_terminate_current(k, NC_STATUS_SUCCESS);
+        nc_ps_thread_returned(k, f);
         return;
     }
     const NcKExport *e = nc_kernel_export(ordinal);

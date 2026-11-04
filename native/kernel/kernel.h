@@ -30,6 +30,8 @@ extern "C" {
 /* In the KPCR's page, past its fields (guest code reads it at fs:): 1 while
  * DPCs are queued (timer.c), for the guest-code KfLowerIrql (kernel.c). */
 #define NC_KPCR_DPC_PENDING 0x800u
+/* Further in that page: PsSetCreateThreadNotifyRoutine's 8 routines (ps.c). */
+#define NC_KPCR_THREAD_NOTIFY 0x840u
 #define NC_KORDINAL_MAX  512u
 #define NC_KORDINAL_THREAD_RETURN 0x3FFu  /* a thread's start routine returned */
 #define NC_KORDINAL_DPC_RETURN    0x3FEu  /* a DPC routine returned */
@@ -356,6 +358,9 @@ void nc_ps_yield(NcKernel *k);
 /* debug (debug.hakux.ncresume=<id>): NtResumeThread on thread t<id> */
 void nc_ps_debug_resume(NcKernel *k, unsigned id);
 void nc_ps_terminate_current(NcKernel *k, uint32_t status);
+/* A thread's start routine returned (f at the stub): it ends as
+ * PsTerminateSystemThread(STATUS_SUCCESS) ends it. */
+void nc_ps_thread_returned(NcKernel *k, NcFrame *f);
 
 bool nc_ps_stack_alloc(NcKernel *k, uint32_t size, uint32_t *base);
 /* The stack at base (size bytes, its pages gone) gives its slot back. */
