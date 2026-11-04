@@ -360,6 +360,36 @@ static void install_fast_paths(NcKernel *k, uint8_t *km)
     k->code_next = NC_KERNEL_VA + off;
 }
 
+/* The pseudo-ordinals' stubs, in the order of their VAs. */
+static const uint16_t k_stub_ordinals[] = {
+    NC_KORDINAL_THREAD_RETURN, NC_KORDINAL_DPC_RETURN, NC_KORDINAL_CALLOUT_RETURN,
+    NC_KORDINAL_ISR_RETURN,    NC_KORDINAL_APC_RETURN, NC_KORDINAL_TRAP,
+    NC_KORDINAL_SEH_RETURN,    NC_KORDINAL_SEH_NESTED, NC_KORDINAL_SEH_COLLIDED,
+    NC_KORDINAL_CONT_RETURN};
+#define K_STUB_COUNT (sizeof(k_stub_ordinals) / sizeof(k_stub_ordinals[0]))
+_Static_assert(K_STUBS + 8 * (K_STUB_COUNT + 1) <= K_TRAMPS, "the stubs fit before the trampolines");
+/* The continuation stub's VA (not in NcKernel: its layout is a savestate's). */
+#define K_CONT_RETURN_VA (NC_KERNEL_VA + K_STUBS + 8 * K_STUB_COUNT)
+
+static void write_stubs(uint8_t *km)
+{
+    for (unsigned i = 0; i < K_STUB_COUNT; i++) {
+        uint8_t *s = km + K_STUBS + 8 * (i + 1);
+        s[0] = 0xCD;
+        s[1] = NC_KCALL_VECTOR;
+        s[2] = k_stub_ordinals[i] & 0xff;
+        s[3] = k_stub_ordinals[i] >> 8;
+    }
+}
+
+void nc_kernel_stubs_refresh(NcKernel *k)
+{
+    write_stubs(nc_vm_host(k->vm, NC_KERNEL_VA));
+    if (k->cpu) {
+        nc_cpu_invalidate(k->cpu, NC_KERNEL_VA + K_STUBS, 8 * (K_STUB_COUNT + 1));
+    }
+}
+
 uint32_t nc_kernel_code_alloc(NcKernel *k, uint32_t len)
 {
     const uint32_t va = (k->code_next + 15) & ~15u;
@@ -439,21 +469,13 @@ bool nc_kernel_init(NcKernel *k, NcVm *vm)
      * kernel runs (int 0x3F with a pseudo-ordinal), 8 bytes apart. */
     k->stop_va = NC_KERNEL_VA + K_STUBS;
     km[K_STUBS] = 0xF4;
-    static const uint16_t stub_ordinals[9] = {
-        NC_KORDINAL_THREAD_RETURN, NC_KORDINAL_DPC_RETURN, NC_KORDINAL_CALLOUT_RETURN,
-        NC_KORDINAL_ISR_RETURN,    NC_KORDINAL_APC_RETURN, NC_KORDINAL_TRAP,
-        NC_KORDINAL_SEH_RETURN,    NC_KORDINAL_SEH_NESTED, NC_KORDINAL_SEH_COLLIDED};
     uint32_t *const stub_va[9] = {&k->thread_return_va, &k->dpc_return_va, &k->callout_return_va,
                                   &k->isr_return_va,    &k->apc_return_va, &k->trap_va,
                                   &k->seh_return_va,    &k->seh_nested_va, &k->seh_collided_va};
     for (unsigned i = 0; i < 9; i++) {
         *stub_va[i] = NC_KERNEL_VA + K_STUBS + 8 * (i + 1);
-        uint8_t *s = km + K_STUBS + 8 * (i + 1);
-        s[0] = 0xCD;
-        s[1] = NC_KCALL_VECTOR;
-        s[2] = stub_ordinals[i] & 0xff;
-        s[3] = stub_ordinals[i] >> 8;
     }
+    write_stubs(km);
 
     /* Processor control region (fs:). KPCR: NT_TIB at 0 (ExceptionList,
      * StackBase, StackLimit, ...), SelfPcr 0x1C, Prcb 0x20, Irql 0x24, PRCB at
@@ -880,6 +902,121 @@ void nc_kernel_callout(NcKernel *k, NcFrame *f, uint32_t routine, const uint32_t
     k->redirected = true;
 }
 
+/* ------------------------------------------------- kernel continuations */
+
+#define KCONT_MAGIC 0x544E434Bu /* "KCNT" */
+enum { KCONT_REC_MAGIC, KCONT_REC_ID, KCONT_REC_POP, KCONT_REC_EBX, KCONT_REC_CTX };
+#define KCONT_REC_BYTES (4u * (KCONT_REC_CTX + NC_KCONT_WORDS))
+
+static NcKCont g_kcont[NC_KCONT_MAX];
+
+void nc_kernel_cont(enum NcKContId id, NcKCont fn)
+{
+    g_kcont[id] = fn;
+}
+
+/* The record under the call's frame, a callout slot for the call's return,
+ * and EBX at the record; returns the record's VA (0: no room for a slot). */
+static uint32_t kcont_push(NcKernel *k, NcFrame *f, enum NcKContId id, const uint32_t ctx[NC_KCONT_WORDS])
+{
+    NcThread *t = k->current;
+    const uint32_t esp = nc_frame_gpr(f, NC_ESP);
+    if (!t || t->ncallouts == NC_MAX_CALLOUTS) {
+        nc_kernel_request_stop(k, f, "continuation %u: nesting too deep", id);
+        return 0;
+    }
+    t->callout_ret[t->ncallouts] = nc_vm_rd32(k->vm, esp);
+    t->callout_esp[t->ncallouts] = esp + k->call_pop;
+    t->callout_irql[t->ncallouts] = 0xFF;
+    t->ncallouts++;
+    const uint32_t rec = esp - 16 - KCONT_REC_BYTES;
+    nc_vm_wr32(k->vm, rec + 4 * KCONT_REC_MAGIC, KCONT_MAGIC);
+    nc_vm_wr32(k->vm, rec + 4 * KCONT_REC_ID, id);
+    nc_vm_wr32(k->vm, rec + 4 * KCONT_REC_POP, k->call_pop);
+    nc_vm_wr32(k->vm, rec + 4 * KCONT_REC_EBX, nc_frame_gpr(f, NC_EBX));
+    for (unsigned i = 0; i < NC_KCONT_WORDS; i++) {
+        nc_vm_wr32(k->vm, rec + 4 * (KCONT_REC_CTX + i), ctx ? ctx[i] : 0);
+    }
+    nc_frame_set_gpr(f, NC_EBX, rec);
+    k->redirected = true;
+    return rec;
+}
+
+void nc_kernel_callout_cont(NcKernel *k, NcFrame *f, uint32_t routine, const uint32_t *args, unsigned nargs,
+                            uint8_t irql, enum NcKContId id, const uint32_t ctx[NC_KCONT_WORDS])
+{
+    const uint32_t rec = kcont_push(k, f, id, ctx);
+    if (!rec) {
+        return;
+    }
+    uint32_t sp = rec - 16 - 4 * nargs;
+    nc_vm_wr32(k->vm, sp, K_CONT_RETURN_VA);
+    for (unsigned i = 0; i < nargs; i++) {
+        nc_vm_wr32(k->vm, sp + 4 + 4 * i, args[i]);
+    }
+    if (irql != 0xFF) {
+        NcThread *t = k->current;
+        t->callout_irql[t->ncallouts - 1] = *pcr_irql(k);
+        *pcr_irql(k) = irql;
+    }
+    nc_frame_set_gpr(f, NC_ESP, sp);
+    nc_frame_set_eip(f, routine);
+}
+
+void nc_kernel_wait_cont(NcKernel *k, NcFrame *f, enum NcKContId id, const uint32_t ctx[NC_KCONT_WORDS])
+{
+    const uint32_t rec = kcont_push(k, f, id, ctx);
+    if (rec) {
+        nc_frame_set_gpr(f, NC_ESP, rec - 16);
+        nc_frame_set_eip(f, K_CONT_RETURN_VA);
+    }
+}
+
+/* The stub after a continuation's routine or wait: the kernel call's frame
+ * back, then the continuation, which returns to the call's caller as the
+ * call would have. */
+static void kcont_return(NcKernel *k, NcFrame *f)
+{
+    NcThread *t = k->current;
+    const uint32_t rec = nc_frame_gpr(f, NC_EBX);
+    uint32_t r[KCONT_REC_CTX + NC_KCONT_WORDS];
+    for (unsigned i = 0; i < KCONT_REC_CTX + NC_KCONT_WORDS; i++) {
+        r[i] = nc_vm_rd32(k->vm, rec + 4 * i);
+    }
+    if (!t || !t->ncallouts || r[KCONT_REC_MAGIC] != KCONT_MAGIC || r[KCONT_REC_ID] >= NC_KCONT_MAX ||
+        !g_kcont[r[KCONT_REC_ID]]) {
+        nc_kernel_request_stop(k, f, "continuation return with no continuation at ebx=%08x", rec);
+        return;
+    }
+    nc_vm_wr32(k->vm, rec + 4 * KCONT_REC_MAGIC, 0);
+    t->ncallouts--;
+    const uint32_t pop = r[KCONT_REC_POP];
+    const uint32_t esp = t->callout_esp[t->ncallouts] - pop;
+    const uint32_t ret = t->callout_ret[t->ncallouts];
+    if (t->callout_irql[t->ncallouts] != 0xFF) {
+        *pcr_irql(k) = t->callout_irql[t->ncallouts];
+        if (*pcr_irql(k) < 2 && nc_dpc_pending()) {
+            k->resched = true;
+        }
+    }
+    const uint32_t eax = nc_frame_gpr(f, NC_EAX);
+    nc_frame_set_gpr(f, NC_EBX, r[KCONT_REC_EBX]);
+    nc_frame_set_gpr(f, NC_ESP, esp);
+    k->call_pop = pop;
+    k->frame = f;
+    k->redirected = false;
+    k->in_call = true;
+    const uint64_t v = g_kcont[r[KCONT_REC_ID]](k, f, eax, &r[KCONT_REC_CTX]);
+    k->in_call = false;
+    if ((t->state == NC_T_TERMINATED) || k->redirected) {
+        return;
+    }
+    nc_frame_set_gpr(f, NC_EAX, (uint32_t)v);
+    nc_frame_set_gpr(f, NC_EDX, (uint32_t)(v >> 32));
+    nc_frame_set_gpr(f, NC_ESP, esp + pop);
+    nc_frame_set_eip(f, ret);
+}
+
 /* ------------------------------------------------------------- the clock */
 
 static pthread_mutex_t g_clock_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -1180,6 +1317,10 @@ static void kcall(NcKernel *k, NcFrame *f, unsigned ordinal)
     }
     if (ordinal == NC_KORDINAL_APC_RETURN) {
         nc_apc_return(k, f);
+        return;
+    }
+    if (ordinal == NC_KORDINAL_CONT_RETURN) {
+        kcont_return(k, f);
         return;
     }
     if (ordinal == NC_KORDINAL_ISR_RETURN) {

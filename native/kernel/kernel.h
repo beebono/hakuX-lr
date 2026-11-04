@@ -41,6 +41,7 @@ extern "C" {
 #define NC_KORDINAL_SEH_NESTED    0x3F8u  /* the kernel's handler around a handler call */
 #define NC_KORDINAL_SEH_COLLIDED  0x3F7u  /* the same, during an unwind */
 #define NC_KORDINAL_APU_SPIN      0x3F5u  /* DirectSound waits on the GP DSP's mailbox (fixups.c) */
+#define NC_KORDINAL_CONT_RETURN   0x3F6u  /* a kernel continuation goes on (nc_kernel_callout_cont) */
 
 enum NcKAbi { NC_KABI_STDCALL, NC_KABI_FASTCALL, NC_KABI_CDECL, NC_KABI_DATA };
 
@@ -640,6 +641,36 @@ void nc_kernel_callout(NcKernel *k, NcFrame *f, uint32_t routine, const uint32_t
 /* The same, with the IRQL at irql while the routine runs. */
 void nc_kernel_callout_at_irql(NcKernel *k, NcFrame *f, uint32_t routine, const uint32_t *args, unsigned nargs,
                                uint8_t irql);
+
+/* Kernel continuations: a kernel call that goes on in the kernel after a
+ * guest routine it runs returns, or after a wait. Its state is a record on
+ * the guest stack under the call's frame (so savestates keep it), which EBX
+ * points at while the routine runs (callee-saved, the routine keeps it):
+ * the continuation's id, the call's stack pop, the caller's EBX and
+ * NC_KCONT_WORDS words of the continuation's own. The continuation runs as
+ * the kernel call did (it may make another callout, wait or return), with
+ * the routine's EAX or the wait's status. */
+#define NC_KCONT_WORDS 6
+enum NcKContId {
+    NC_KCONT_IRP_COMPLETE,      /* iomgr.c: IofCompleteRequest's completion routines */
+    NC_KCONT_IRP_CALLED,        /* iomgr.c: a driver's dispatch routine returned */
+    NC_KCONT_IRP_WAITED,        /* iomgr.c: a synchronous request's wait ended */
+    NC_KCONT_START_IO,          /* iomgr.c: a driver's StartIo returned */
+    NC_KCONT_IO_REMOVE,         /* iomgr.c: NtRemoveIoCompletion's wait ended */
+    NC_KCONT_THREAD_NOTIFY,     /* ps.c: a thread notify routine returned */
+    NC_KCONT_MAX
+};
+typedef uint64_t (*NcKCont)(NcKernel *k, NcFrame *f, uint32_t eax, const uint32_t *ctx);
+void nc_kernel_cont(enum NcKContId id, NcKCont fn);
+/* From a kernel call or a continuation: runs routine(args...) at irql (0xFF:
+ * the current one), then continuation id with ctx. */
+void nc_kernel_callout_cont(NcKernel *k, NcFrame *f, uint32_t routine, const uint32_t *args, unsigned nargs,
+                            uint8_t irql, enum NcKContId id, const uint32_t ctx[NC_KCONT_WORDS]);
+/* From a kernel call or a continuation whose thread now waits (its wait set
+ * up, NC_T_WAITING): the wait's status goes to continuation id with ctx. */
+void nc_kernel_wait_cont(NcKernel *k, NcFrame *f, enum NcKContId id, const uint32_t ctx[NC_KCONT_WORDS]);
+/* After a state's load: the stubs a state saved by an older build lacks. */
+void nc_kernel_stubs_refresh(NcKernel *k);
 
 /* apc.c: asynchronous procedure calls. */
 void nc_apc_register(NcKernel *k);
