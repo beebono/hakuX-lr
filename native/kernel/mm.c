@@ -216,8 +216,25 @@ static uint32_t find_free(uint32_t size, bool top_down)
     return 0;
 }
 
+/* Failed commits must leave existing mappings intact and release new pages,
+ * so titles can retry smaller heap allocations after STATUS_NO_MEMORY. */
 static bool commit(NcKernel *k, uint32_t va, uint32_t size, bool zero)
 {
+    uint32_t need = 0;
+    for (uint32_t p = va; p < va + size; p += NC_PAGE) {
+        need += nc_vm_phys(k->vm, p) == UINT32_MAX;
+    }
+    if (!need) {
+        return true;
+    }
+    /* Avoid a full RAM scan for small commits; rollback handles failures. */
+    if (need > 16 && (uint64_t)need * NC_PAGE > nc_vm_free_bytes(k->vm)) {
+        return false;
+    }
+    /* Track only this call's mappings for rollback. */
+    struct { uint32_t va, pa, len; } *got = NULL;
+    unsigned ngot = 0, cap = 0;
+    bool ok = true;
     for (uint32_t p = va; p < va + size;) {
         if (nc_vm_phys(k->vm, p) != UINT32_MAX) {
             p += NC_PAGE;
@@ -232,16 +249,42 @@ static bool commit(NcKernel *k, uint32_t va, uint32_t size, bool zero)
         while (piece >= NC_PAGE && (pa = nc_vm_alloc_phys(k->vm, piece, 0, k->vm->ram_size)) == UINT32_MAX) {
             piece = piece > NC_PAGE ? nc_align_up(piece / 2, NC_PAGE) : 0;
         }
-        if (pa == UINT32_MAX || !nc_vm_map(k->vm, p, pa, piece)) {
-            return false;
+        if (pa == UINT32_MAX) {
+            ok = false;
+            break;
         }
+        if (ngot == cap) {
+            cap = cap ? cap * 2 : 16;
+            void *grown = realloc(got, cap * sizeof(*got));
+            if (!grown) {
+                nc_vm_free_phys(k->vm, pa, piece);
+                ok = false;
+                break;
+            }
+            got = grown;
+        }
+        if (!nc_vm_map(k->vm, p, pa, piece)) {
+            nc_vm_free_phys(k->vm, pa, piece);
+            ok = false;
+            break;
+        }
+        got[ngot].va = p, got[ngot].pa = pa, got[ngot].len = piece;
+        ngot++;
         if (zero) {
             memset(k->vm->ram + pa, 0, piece);
         }
         k->vm_commits += piece / NC_PAGE;
         p += piece;
     }
-    return true;
+    if (!ok) {
+        for (unsigned i = 0; i < ngot; i++) {
+            nc_vm_unmap(k->vm, got[i].va, got[i].len);
+            nc_vm_free_phys(k->vm, got[i].pa, got[i].len);
+            k->vm_commits -= got[i].len / NC_PAGE;
+        }
+    }
+    free(got);
+    return ok;
 }
 
 /* One unmap (a syscall) per run of committed pages, then their physical
@@ -301,6 +344,7 @@ static uint64_t NtAllocateVirtualMemory(NcKernel *k, NcFrame *f, const uint32_t 
     }
 
     /* A commit at no address reserves the range too (VirtualAlloc(NULL, n, MEM_COMMIT)). */
+    bool reserved = false;
     if (type & MEM_RESERVE || !base) {
         if (base) {
             uint32_t end = nc_align_up(base + size, NC_PAGE);
@@ -319,6 +363,7 @@ static uint64_t NtAllocateVirtualMemory(NcKernel *k, NcFrame *f, const uint32_t 
         if (!add_region(base, size, a[4], false)) {
             return NC_STATUS_NO_MEMORY;
         }
+        reserved = true;
     } else {
         uint32_t end = nc_align_up(base + size, NC_PAGE);
         base &= ~(NC_PAGE - 1);
@@ -330,10 +375,23 @@ static uint64_t NtAllocateVirtualMemory(NcKernel *k, NcFrame *f, const uint32_t 
             return 0xC000002Du; /* STATUS_CONFLICTING_ADDRESSES-ish: not reserved */
         }
     }
+    static unsigned s_refused;          /* failures since the last successful commit */
     if ((type & MEM_COMMIT) && !commit(k, base, size, !(type & MEM_NOZERO))) {
-        nc_log("hakuX-native-mm", "commit %08x+%x: out of physical memory", base, size);
+        /* Log the first four failures, then powers of two, as in contig_alloc. */
+        const unsigned n = ++s_refused;
+        if (n <= 4 || !(n & (n - 1))) {
+            nc_log("hakuX-native-mm", "commit %08x+%x: out of physical memory (#%u, %u KiB free)", base, size, n,
+                   nc_vm_free_bytes(k->vm) >> 10);
+        }
         log_holders(k, "out of memory");
+        /* Remove this call's reservation, appended by add_region above. */
+        if (reserved && g_nregions && g_regions[g_nregions - 1].base == base) {
+            g_nregions--;
+        }
         return NC_STATUS_NO_MEMORY;
+    }
+    if (type & MEM_COMMIT) {
+        s_refused = 0;
     }
     nc_vm_wr32(k->vm, a[0], base);
     nc_vm_wr32(k->vm, a[2], size);

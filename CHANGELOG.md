@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Fixes
+
+- **Fix memory leaks after failed allocations** — `NtAllocateVirtualMemory`
+  now rolls back failed commits and removes reservations created by the
+  failed call. Games can retry smaller heap allocations without losing RAM.
+  Fixes Jedi Academy's crash after New Game (#92) and loading failures in
+  Aeon Flux, BloodRayne 2, Beat Down, and other titles. On AMD64, 12 of 13
+  affected games now reach gameplay; Cabela's Outdoor Adventures reaches
+  its gameplay options screen without crashing. Repeated failure logs are
+  rate-limited.
+
 ## linux-v0.19.1 (Linux, aarch64 and x86-64, and Android)
 
 3D sound is stereo again, and a game that polls the system time no longer
