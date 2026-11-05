@@ -260,6 +260,7 @@ static void caps_override(HleCaps *c)
     }
     static const struct { const char *name; size_t off; } k_caps[] = {
         { "bc", offsetof(HleCaps, bc) },             { "vids", offsetof(HleCaps, vids) },
+        { "etc2", offsetof(HleCaps, etc2) },
         { "push", offsetof(HleCaps, push) },         { "pushdesc", offsetof(HleCaps, push_desc) },
         { "cbc", offsetof(HleCaps, cbc) },           { "d24s8", offsetof(HleCaps, d24s8) },
         { "4444", offsetof(HleCaps, x4444) },        { "bindless", offsetof(HleCaps, bindless) },
@@ -644,6 +645,7 @@ static int vk_init(PFN_vkGetInstanceProcAddr gipa_shared, VkInstance inst_shared
         c->r5551 = ok[2];
         c->r4444 = ok[3];
     }
+    c->etc2 = q.features.textureCompressionETC2;
     c->bc = q.features.textureCompressionBC;
     if (!c->bc) {
         /* the formats without the feature (Xclipse; PowerVR's D-Series) */
@@ -702,6 +704,15 @@ static int vk_init(PFN_vkGetInstanceProcAddr gipa_shared, VkInstance inst_shared
     vkGetPhysicalDeviceFormatProperties(v->phys, VK_FORMAT_R16G16_SSCALED, &fp);
     c->sscaled = fp.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT;
     caps_override(c);
+    {   /* DXT as ETC2 (tex/etc2_enc.h): without BC, where the driver samples
+         * ETC2; HAKUX_HLE_DXT_ETC2 / debug.hakux.dxt_etc2 decides either way */
+        char v[32] = "";
+#ifdef __ANDROID__
+        hle_prop_get("debug.hakux.dxt_etc2", v);
+#endif
+        const char *e = v[0] ? v : getenv("HAKUX_HLE_DXT_ETC2");
+        c->dxt_etc2 = c->etc2 && (e ? atoi(e) != 0 : !c->bc);
+    }
     c->max_line_width = c->wide_lines ? c->max_line_width : 1.0f;
     c->fbfetch = c->fbfetch && c->dyn_render;  /* local read is dynamic rendering's */
     /* with local read, dynamic rendering's pipelines may ask for it (VUID-06482) */
@@ -907,10 +918,10 @@ static int vk_init(PFN_vkGetInstanceProcAddr gipa_shared, VkInstance inst_shared
             c->local_read, c->fbfetch, c->raster_order, c->cache_control, c->swapchain);
     hle_log("hakuX-hle-back", "vk: bc=%d vids=%d push=%d push_desc=%d cbc=%d cbc_any=%d bcs=%d "
             "bcs_image=%d x4444=%d r16=%d r5551=%d r4444=%d d24s8=%d bda=%d ahb=%d vk13=%d "
-            "dyn_render=%d sync2=%d eds1=%d eds2=%d bindless=%d depth_clamp=%d (0: the substitute "
-            "runs)", c->bc, c->vids, c->push, c->push_desc, c->cbc, c->cbc_any, c->bcs, c->bcs_image,
+            "dyn_render=%d sync2=%d eds1=%d eds2=%d bindless=%d depth_clamp=%d etc2=%d dxt_etc2=%d "
+            "(0: the substitute runs)", c->bc, c->vids, c->push, c->push_desc, c->cbc, c->cbc_any, c->bcs, c->bcs_image,
             c->x4444, c->r16, c->r5551, c->r4444, c->d24s8, c->bda, c->ahb, c->vk13, c->dyn_render, c->sync2, c->eds1, c->eds2,
-            c->bindless, c->depth_clamp);
+            c->bindless, c->depth_clamp, c->etc2, c->dxt_etc2);
     hle_quirks_init(v->phys);           /* what this driver needs worked around */
     log_unsupported(&f, &q);
     VkResult r;

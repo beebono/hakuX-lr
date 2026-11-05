@@ -9,6 +9,7 @@
 #include "hw/xbox/hle/mem/barrier.h"
 #include "hw/xbox/hle/mem/guestmem.h"
 #include "hw/xbox/hle/pb/pbres.h"
+#include "hw/xbox/hle/tex/etc2_enc.h"
 #include "hw/xbox/hle/tex/xdk_res.h"
 #include "hw/xbox/hle/tex/xg_swizzle.h"
 #include "hw/xbox/hle/vk/back.h"
@@ -169,6 +170,53 @@ static void dxt_volume(uint32_t xfmt, const uint8_t *s, uint32_t w, uint32_t h, 
     }
 }
 
+/* Whether any DXT1 block of n at s is in three-colour mode with a transparent
+ * texel (index 3): the ETC2 then needs punch-through alpha */
+static bool dxt1_punch(const uint8_t *s, uint32_t n)
+{
+    for (uint32_t i = 0; i < n; i++, s += 8) {
+        const uint16_t c0 = s[0] | s[1] << 8, c1 = s[2] | s[3] << 8;
+        if (c0 > c1) {
+            continue;
+        }
+        const uint32_t idx = s[4] | s[5] << 8 | s[6] << 16 | (uint32_t)s[7] << 24;
+        for (unsigned k = 0; k < 32; k += 2) {
+            if (((idx >> k) & 3) == 3) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/* One level of a DXT texture (w x h at s) as ETC2 (oxfmt, HLE_XFMT_ETC2_*)
+ * at out: each block decoded and encoded again, the same bytes */
+static void dxt_to_etc2(uint32_t xfmt, uint32_t oxfmt, const uint8_t *s, uint32_t w, uint32_t h,
+                        uint8_t *out)
+{
+    const unsigned bb = xfmt == HLE_XFMT_DXT1 ? 8 : 16;
+    const uint32_t bw = (w + 3) / 4, bh = (h + 3) / 4;
+    uint32_t px[16];
+    for (uint32_t i = 0; i < bw * bh; i++, s += bb) {
+        dxt_block(xfmt, s, 0, 0, 4, 4, px);
+        switch (oxfmt) {
+        case HLE_XFMT_ETC2_RGB:
+            hle_etc2_rgb_block(px, out);
+            out += 8;
+            break;
+        case HLE_XFMT_ETC2_RGBA1:
+            hle_etc2_rgba1_block(px, out);
+            out += 8;
+            break;
+        default:
+            hle_eac_alpha_block(px, out);
+            hle_etc2_rgb_block(px, out + 8);
+            out += 16;
+            break;
+        }
+    }
+}
+
 /* Whether the back end samples a texture's texels as the guest stores them
  * (vk/draw.c tex_format), else they're converted on the way into the arena
  * (hle_tex_convert): R6G5B5, which Vulkan has no format for, and depth, read
@@ -321,11 +369,30 @@ static bool tex_define(uint32_t id, const uint32_t h5[5], const HleResDesc *dp,
      * one slice); a volume's levels are depth slices (3D swizzle, or DXT
      * blocks in groups of four slices), depth halving per level */
     bool vol = d.kind == HLE_RK_VOLUME;
-    bool dxtd = (fi->flags & HLE_FI_DXT) && (vol || !g_hvk.caps.bc);
+    /* ... or, without BC, as ETC2 of the same bytes (caps.dxt_etc2): DXT1 as
+     * RGB, or RGB A1 where a block has a transparent texel; DXT3/5 as RGBA */
+    bool etc = (fi->flags & HLE_FI_DXT) && !vol && g_hvk.caps.dxt_etc2;
+    bool dxtd = (fi->flags & HLE_FI_DXT) && !etc && (vol || !g_hvk.caps.bc);
+    uint32_t etc_fmt = 0;
+    if (etc) {
+        etc_fmt = d.fmt == HLE_XFMT_DXT1 ? HLE_XFMT_ETC2_RGB : HLE_XFMT_ETC2_RGBA;
+        const uint32_t nf = d.kind == HLE_RK_CUBE ? 6 : 1, nl = MAX(ri.levels, 1u);
+        for (uint32_t f = 0; etc_fmt == HLE_XFMT_ETC2_RGB && f < nf; f++) {
+            for (uint32_t l = 0; l < nl; l++) {
+                uint32_t pitch;
+                const uint32_t w = MAX(d.w >> l, 1u), h = MAX(d.h >> l, 1u);
+                if (dxt1_punch(src + hle_res_subresource(&d, f, l, &pitch), (w + 3) / 4 * ((h + 3) / 4))) {
+                    etc_fmt = HLE_XFMT_ETC2_RGBA1;
+                    break;
+                }
+            }
+        }
+    }
     /* a format the back end doesn't sample as stored: A8R8G8B8 as well, or
      * depth as a float (hle_tex_convert), a linear texture a linear one */
-    bool conv = !p8 && !dxtd && !tex_native(d.fmt);
-    uint32_t oxfmt = p8 || dxtd ? HLE_XFMT_A8R8G8B8 : conv ? hle_tex_conv_xfmt(d.fmt) : d.fmt;
+    bool conv = !p8 && !dxtd && !etc && !tex_native(d.fmt);
+    uint32_t oxfmt = p8 || dxtd ? HLE_XFMT_A8R8G8B8 : etc ? etc_fmt :
+                     conv ? hle_tex_conv_xfmt(d.fmt) : d.fmt;
     const HleFmtInfo *ofi = hle_fmt_info(oxfmt);
     /* colour sign: those 8-bit channels offset binary (the texels as stored,
      * not a conversion's) */
@@ -363,7 +430,9 @@ static bool tex_define(uint32_t id, const uint32_t h5[5], const HleResDesc *dp,
                 orow = w * fi->bpp / 8;
                 out = raw = g_malloc((size_t)orow * h * dd);
             }
-            if (dxtd && !vol) {
+            if (etc) {
+                dxt_to_etc2(d.fmt, oxfmt, s, w, h, dst + pos);
+            } else if (dxtd && !vol) {
                 dxt_volume(d.fmt, s, w, h, 1, (uint32_t *)(dst + pos));
             } else if (vol) {
                 if (dxtd) {

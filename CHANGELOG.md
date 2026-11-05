@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### What's new
+
+- **DXT textures as ETC2 on GPUs without BC** — Mali (and PowerVR) drivers
+  don't sample BC1-3, so hakuX decoded every DXT texture to A8R8G8B8: four
+  times the bytes for DXT3/5, eight for DXT1, in GPU memory the process
+  doesn't see. Voodoo Vince's first level held 125 MB of textures that way
+  and ran a 1 GB RG DS Plus out of memory. Where the driver samples ETC2,
+  each DXT block is now decoded and encoded again as ETC2 of the same size
+  (DXT1 as RGB, or RGB with punch-through alpha; DXT3/5 as RGBA with EAC
+  alpha), 21 MB for the same level, and the upload arena is 32 MB rather
+  than 64 MB. `HAKUX_HLE_DXT_ETC2=0` (`debug.hakux.dxt_etc2=0`) keeps the
+  decode; `=1` encodes on a GPU with BC too. The caps log line shows
+  `etc2=` and `dxt_etc2=`.
+
 ## linux-v0.19.2 (Linux, aarch64 and x86-64, and Android)
 
 ### Fixes

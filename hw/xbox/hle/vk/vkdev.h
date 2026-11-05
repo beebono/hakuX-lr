@@ -43,6 +43,11 @@ typedef struct HleCaps {
      * off by name ("-bc,-vids,..."): any device runs the substitutes. */
     bool bc;                    /* BC1-3 sampled: DXT uploaded as is, else decoded to
                                    A8R8G8B8 on the way into the arena (pb/pbres.c) */
+    bool etc2;                  /* ETC2 sampled (Mali, PowerVR, Adreno) */
+    bool dxt_etc2;              /* ... and DXT is encoded again as ETC2 on the way into
+                                   the arena, the bytes of the DXT (tex/etc2_enc.h): on
+                                   without BC; HAKUX_HLE_DXT_ETC2=0 (or debug.hakux.
+                                   dxt_etc2=0) off, =1 on with BC too */
     bool vids;                  /* VK_EXT_vertex_input_dynamic_state, else the vertex
                                    layout is in the pipeline (vk/draw.c PipeKey.vi) */
     bool push;                  /* the push block (HleFfPush) fits the push constants,

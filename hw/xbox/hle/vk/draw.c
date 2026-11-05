@@ -325,6 +325,10 @@ static bool tex_format(uint32_t x, TexFmt *o)
     case HLE_XFMT_DXT1: o->fmt = VK_FORMAT_BC1_RGBA_UNORM_BLOCK; return true;
     case HLE_XFMT_DXT3: o->fmt = VK_FORMAT_BC2_UNORM_BLOCK; return true;
     case HLE_XFMT_DXT5: o->fmt = VK_FORMAT_BC3_UNORM_BLOCK; return true;
+    /* DXT encoded again on a GPU without BC (pb/pbres.c) */
+    case HLE_XFMT_ETC2_RGB: o->fmt = VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK; return g_hvk.caps.etc2;
+    case HLE_XFMT_ETC2_RGBA1: o->fmt = VK_FORMAT_ETC2_R8G8B8A1_UNORM_BLOCK; return g_hvk.caps.etc2;
+    case HLE_XFMT_ETC2_RGBA: o->fmt = VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK; return g_hvk.caps.etc2;
     default:
         return false;
     }
