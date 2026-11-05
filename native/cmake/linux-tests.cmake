@@ -90,6 +90,11 @@ if(NC_GUEST_TESTS)
            COMMAND "${Python3_EXECUTABLE}" "${NC_REPO}/tests/native/linux/kernel_io.py" "$<TARGET_FILE_DIR:xboxrun>"
                    "${CMAKE_C_COMPILER}")
   set_tests_properties(kernel-io PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
+  # Failed commits must not leak physical pages or reservations.
+  add_test(NAME kernel-mm
+           COMMAND "${Python3_EXECUTABLE}" "${NC_REPO}/tests/native/linux/kernel_mm.py" "$<TARGET_FILE_DIR:xboxrun>"
+                   "${CMAKE_C_COMPILER}")
+  set_tests_properties(kernel-mm PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
 endif()
 if(TARGET hakux_libretro)
   # The APU made again in one process (a relaunch), its EP's samples through
