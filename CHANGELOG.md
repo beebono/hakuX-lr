@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## linux-v0.19.2 (Linux, aarch64 and x86-64, and Android)
+
 ### Fixes
 
 - **Fix memory leaks after failed allocations** — `NtAllocateVirtualMemory`
