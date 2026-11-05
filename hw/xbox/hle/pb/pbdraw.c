@@ -103,6 +103,11 @@
 #define SCAN_IDLE_NS 100000000              /* nothing presented this long: the title isn't flipping */
 #define TEX_SLOTS 2048u                     /* the texture table (open addressing) */
 #define TEX_MAX 1536u                       /* ... this full: the least recently used go (tex_evict) */
+/* ... or their images past this many bytes (HAKUX_HLE_TEX_BUDGET_MB, 0 none;
+ * the default on a host with 1.5 GiB of RAM or less; a dropped texture is
+ * defined again when a draw next samples it) */
+#define TEX_BUDGET_SMALL_MB 96u
+#define TEX_BUDGET_SMALL_RAM (1536ull << 20)
 
 /* A target's memory as it was when its image and it last matched: the
  * writes reported to its pages (mem/barrier.c hle_mem_wseq_sum), its first
@@ -156,6 +161,7 @@ typedef struct PbTex {
     uint32_t pal_hash;
     uint64_t checked;                   /* the epoch it was last checked at */
     uint64_t edge_hash[2];              /* its bytes on its first and last pages, at definition */
+    uint32_t host_bytes;                /* its image's texels as uploaded (g_pd.tex_bytes) */
     bool ok;                            /* defined (else it can't be: not again) */
 } PbTex;
 
@@ -267,6 +273,9 @@ static struct {
     uint64_t draws, ff, skipped;
     PbTex *tex;                         /* TEX_SLOTS */
     unsigned ntex;
+    uint64_t tex_bytes;                 /* the textures' images (host_bytes) */
+    uint64_t tex_budget;                /* tex_bytes past it: tex_evict; 0 none */
+    bool tex_budget_read;
     uint64_t tex_defs, tex_flushes;
 } g_pd;
 
@@ -464,6 +473,12 @@ void hle_pbd_vb_counts(uint64_t *in_place, uint64_t *copied, uint64_t *bnd_kicks
     *copied = g_pd.vb_copied;
     *bnd_kicks = g_pd.bnd_kicks;
     *unindexed = g_pd.seq_draws;
+}
+
+void hle_pbd_tex_held(unsigned *n, uint64_t *bytes)
+{
+    *n = g_pd.ntex;
+    *bytes = g_pd.tex_bytes;
 }
 
 void hle_pbd_counts(uint64_t *clears, uint64_t *swaps, unsigned *objects,
@@ -2471,6 +2486,41 @@ void hle_pbd_skip_reasons(char *buf, size_t len)
     }
 }
 
+/* The textures' image budget (TEX_BUDGET_SMALL_MB): HAKUX_HLE_TEX_BUDGET_MB
+ * (debug.hakux.tex_budget_mb), else by the host's RAM */
+static uint64_t tex_budget(void)
+{
+    char v[32] = "";
+#ifdef __ANDROID__
+    hle_prop_get("debug.hakux.tex_budget_mb", v);
+#endif
+    const char *e = v[0] ? v : getenv("HAKUX_HLE_TEX_BUDGET_MB");
+    uint64_t mb = 0;
+    if (e) {
+        mb = (uint64_t)atoi(e);
+    } else {
+        uint64_t ram = 0;
+#ifdef __linux__
+        FILE *f = fopen("/proc/meminfo", "r");
+        if (f) {
+            unsigned long long kb = 0;
+            char line[128];
+            while (fgets(line, sizeof(line), f)) {
+                if (sscanf(line, "MemTotal: %llu kB", &kb) == 1) {
+                    ram = kb << 10;
+                    break;
+                }
+            }
+            fclose(f);
+        }
+#endif
+        mb = ram && ram <= TEX_BUDGET_SMALL_RAM ? TEX_BUDGET_SMALL_MB : 0;
+    }
+    hle_log("hakuX-hle-pb", "textures: image budget %llu MiB%s", (unsigned long long)mb,
+            mb ? "" : " (none)");
+    return mb << 20;
+}
+
 /* Every texture forgotten (the table full): their images go. */
 static void tex_flush(void)
 {
@@ -2484,6 +2534,7 @@ static void tex_flush(void)
     }
     memset(g_pd.tex, 0, TEX_SLOTS * sizeof(PbTex));
     g_pd.ntex = 0;
+    g_pd.tex_bytes = 0;
     g_pd.tex_flushes++;
 }
 
@@ -2537,16 +2588,20 @@ static void tex_evict(void)
         return;
     }
     memset(g_pd.tex, 0, TEX_SLOTS * sizeof(PbTex));
+    const uint64_t had = g_pd.tex_bytes;
+    g_pd.tex_bytes = 0;
     for (unsigned i = 0; i < nkeep; i++) {
         uint32_t h = hash32(keep[i].key, sizeof(keep[i].key)) % TEX_SLOTS;
         while (g_pd.tex[h].id) {
             h = (h + 1) % TEX_SLOTS;
         }
         g_pd.tex[h] = keep[i];
+        g_pd.tex_bytes += keep[i].host_bytes;
     }
     g_pd.ntex = nkeep;
-    hle_log("hakuX-hle-pb", "textures: table full, the %u checked longest ago dropped (%u kept)", n - nkeep,
-            nkeep);
+    hle_log("hakuX-hle-pb", "textures: %s, the %u checked longest ago dropped (%u kept, %llu of %llu MiB)",
+            n >= TEX_MAX ? "table full" : "past the budget", n - nkeep, nkeep,
+            (unsigned long long)(g_pd.tex_bytes >> 20), (unsigned long long)(had >> 20));
 }
 
 /* A 32-bit linear colour texture (w x h at pa, channels from the depth
@@ -2856,7 +2911,11 @@ static uint32_t texture(unsigned s, bool *unset, bool *lin)
     }
     bool redefine = false;
     if (!t->id) {
-        if (g_pd.ntex >= TEX_MAX) {
+        if (!g_pd.tex_budget_read) {
+            g_pd.tex_budget_read = true;
+            g_pd.tex_budget = tex_budget();
+        }
+        if (g_pd.ntex >= TEX_MAX || (g_pd.tex_budget && g_pd.tex_bytes > g_pd.tex_budget)) {
             tex_evict();
             return texture(s, unset, lin);
         }
@@ -2913,9 +2972,11 @@ static uint32_t texture(unsigned s, bool *unset, bool *lin)
     }
     if (redefine) {
         const uint32_t h5[5] = { HLE_COMMON_TYPE_TEXTURE | 1, off, 0, fmt, size };
-        uint32_t bytes = 0;
+        uint32_t bytes = 0, host_bytes = 0;
         coh_pend_wait(pa, hle_draw_tex_bytes(h5));  /* a copy queued into its texels lands first */
-        t->ok = hle_draw_tex_define(t->id, h5, pal, npal, sxor ? sign : 0, &bytes) != 0;
+        t->ok = hle_draw_tex_define(t->id, h5, pal, npal, sxor ? sign : 0, &bytes, &host_bytes) != 0;
+        g_pd.tex_bytes += host_bytes - t->host_bytes;
+        t->host_bytes = host_bytes;
         t->pa = pa;
         t->bytes = bytes;
         t->pal_hash = pal_hash;

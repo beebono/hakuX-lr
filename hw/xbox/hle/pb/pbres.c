@@ -339,7 +339,8 @@ static bool tex_desc(const uint32_t h5[5], HleResDesc *dp, HleResInfo *rip)
  * unswizzled or converted into the arena as object id's image (HLE_OP_TEX);
  * false if they can't be (format, memory, arena). */
 static bool tex_define(uint32_t id, const uint32_t h5[5], const HleResDesc *dp,
-                       const HleResInfo *rip, const uint32_t *pal, uint32_t npal, uint32_t sign)
+                       const HleResInfo *rip, const uint32_t *pal, uint32_t npal, uint32_t sign,
+                       uint32_t *host_bytes)
 {
     const HleResDesc d = *dp;
     const HleResInfo ri = *rip;
@@ -504,6 +505,7 @@ static bool tex_define(uint32_t id, const uint32_t h5[5], const HleResDesc *dp,
             hle_log("hakuX-hle-front", "texdump %s (%u bytes)", p, total);
         }
     }
+    *host_bytes = total;
     HleCmdTex *c = hle_fe_begin(HLE_OP_TEX, sizeof(*c));
     c->id = id;
     c->xfmt = oxfmt;
@@ -527,18 +529,20 @@ uint32_t hle_draw_tex_bytes(const uint32_t h5[5])
 }
 
 uint32_t hle_draw_tex_define(uint32_t id, const uint32_t h5[5], const uint32_t *pal, uint32_t npal,
-                             uint32_t sign, uint32_t *bytes)
+                             uint32_t sign, uint32_t *bytes, uint32_t *host_bytes)
 {
     HleResDesc d;
     HleResInfo ri;
+    *host_bytes = 0;
     if (!tex_desc(h5, &d, &ri)) {
         return 0;
     }
     *bytes = ri.bytes;
     if (d.fmt == HLE_XFMT_YUY2 || d.fmt == HLE_XFMT_UYVY) {
+        *host_bytes = d.w * d.h * 4;
         return yuv_define(id, h5, &d) ? id : 0;        /* movies: converted to A8R8G8B8 */
     }
-    return tex_define(id, h5, &d, &ri, pal, npal, sign) ? id : 0;
+    return tex_define(id, h5, &d, &ri, pal, npal, sign, host_bytes) ? id : 0;
 }
 
 /* The overlay is not a texture object: the video decoder rewrites it every
