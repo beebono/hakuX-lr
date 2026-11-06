@@ -19,7 +19,8 @@
 - **A budget for texture images** — The push-buffer decoder drops its
   least recently used textures when their images pass a byte budget, as it
   did when their table filled (a dropped texture is defined again when a
-  draw next samples it): 96 MB on a host with 1.5 GB of RAM or less, none
+  draw next samples it; textures the current frame samples are kept, the
+  budget passed until it ends): 96 MB on a host with 1.5 GB of RAM or less, none
   elsewhere; `HAKUX_HLE_TEX_BUDGET_MB` (`debug.hakux.tex_budget_mb`) sets
   it, 0 for none. The periodic `hakuX-hle-pb` line shows the textures held
   and their bytes.

@@ -276,6 +276,7 @@ static struct {
     uint64_t tex_bytes;                 /* the textures' images (host_bytes) */
     uint64_t tex_budget;                /* tex_bytes past it: tex_evict; 0 none */
     bool tex_budget_read;
+    uint64_t tex_budget_stuck;          /* epoch + 1 budget eviction found none to drop */
     uint64_t tex_defs, tex_flushes;
 } g_pd;
 
@@ -2548,8 +2549,11 @@ static int cmp_u64(const void *a, const void *b)
  * images with them, and the rest are placed again (open addressing has no
  * deletion). Keys of memory a title has reused piled up until every texture
  * went at once, and the working set was defined again over the next frames.
- * None checked this epoch goes: the draw being built may hold its id. */
-static void tex_evict(void)
+ * None checked this epoch goes: the draw being built may hold its id.
+ * Table full and every texture checked this epoch: all go (tex_flush).
+ * Past the budget only (full false), none goes then and the budget is
+ * overshot until the epoch ends. False: none went. */
+static bool tex_evict(bool full)
 {
     static uint64_t when[TEX_SLOTS];
     static PbTex keep[TEX_SLOTS];
@@ -2558,6 +2562,9 @@ static void tex_evict(void)
         if (g_pd.tex[i].id) {
             when[n++] = g_pd.tex[i].checked;
         }
+    }
+    if (!n) {
+        return false;
     }
     qsort(when, n, sizeof(when[0]), cmp_u64);
     /* a quarter: all checked before the cut, and as many checked at it as
@@ -2584,8 +2591,12 @@ static void tex_evict(void)
         hle_fe_commit();
     }
     if (nkeep == n) {
+        if (!full) {
+            g_pd.tex_budget_stuck = g_pd.epoch + 1;
+            return false;
+        }
         tex_flush();                    /* all of them checked this epoch */
-        return;
+        return true;
     }
     memset(g_pd.tex, 0, TEX_SLOTS * sizeof(PbTex));
     const uint64_t had = g_pd.tex_bytes;
@@ -2600,8 +2611,9 @@ static void tex_evict(void)
     }
     g_pd.ntex = nkeep;
     hle_log("hakuX-hle-pb", "textures: %s, the %u checked longest ago dropped (%u kept, %llu of %llu MiB)",
-            n >= TEX_MAX ? "table full" : "past the budget", n - nkeep, nkeep,
+            full ? "table full" : "past the budget", n - nkeep, nkeep,
             (unsigned long long)(g_pd.tex_bytes >> 20), (unsigned long long)(had >> 20));
+    return true;
 }
 
 /* A 32-bit linear colour texture (w x h at pa, channels from the depth
@@ -2915,9 +2927,10 @@ static uint32_t texture(unsigned s, bool *unset, bool *lin)
             g_pd.tex_budget_read = true;
             g_pd.tex_budget = tex_budget();
         }
-        if (g_pd.ntex >= TEX_MAX || (g_pd.tex_budget && g_pd.tex_bytes > g_pd.tex_budget)) {
-            tex_evict();
-            return texture(s, unset, lin);
+        const bool full = g_pd.ntex >= TEX_MAX;
+        if ((full || (g_pd.tex_budget && g_pd.tex_bytes > g_pd.tex_budget &&
+                      g_pd.tex_budget_stuck != g_pd.epoch + 1)) && tex_evict(full)) {
+            return texture(s, unset, lin);  /* the table placed again: t moved */
         }
         memcpy(t->key, key, sizeof(key));
         t->id = g_pd.next_id++;
@@ -2975,8 +2988,11 @@ static uint32_t texture(unsigned s, bool *unset, bool *lin)
         uint32_t bytes = 0, host_bytes = 0;
         coh_pend_wait(pa, hle_draw_tex_bytes(h5));  /* a copy queued into its texels lands first */
         t->ok = hle_draw_tex_define(t->id, h5, pal, npal, sxor ? sign : 0, &bytes, &host_bytes) != 0;
-        g_pd.tex_bytes += host_bytes - t->host_bytes;
-        t->host_bytes = host_bytes;
+        if (t->ok) {                    /* failed: the back end keeps the image it had */
+            g_pd.tex_bytes -= t->host_bytes;
+            g_pd.tex_bytes += host_bytes;
+            t->host_bytes = host_bytes;
+        }
         t->pa = pa;
         t->bytes = bytes;
         t->pal_hash = pal_hash;
