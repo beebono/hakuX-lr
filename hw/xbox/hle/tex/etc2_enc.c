@@ -302,8 +302,8 @@ void hle_eac_alpha_block(const uint32_t px[16], uint8_t out[8])
         const int *tab = k_atab[t];
         const int span = tab[7] - tab[3];
         const int m0 = ((hi - lo) + span / 2) / span;
-        for (int m = m0; m <= m0; m++) {
-            m = m < 1 ? 1 : m > 15 ? 15 : m;
+        {
+            const int m = m0 < 1 ? 1 : m0 > 15 ? 15 : m0;
             int base = (lo + hi - m * (tab[7] + tab[3])) / 2;
             base = clamp255(base);
             int v[8];

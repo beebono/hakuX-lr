@@ -11,16 +11,15 @@
   and ran a 1 GB RG DS Plus out of memory. Where the driver samples ETC2,
   each DXT block is now decoded and encoded again as ETC2 of the same size
   (DXT1 as RGB, or RGB with punch-through alpha; DXT3/5 as RGBA with EAC
-  alpha), 21 MB for the same level, and the upload arena is 32 MB rather
-  than 64 MB. `HAKUX_HLE_DXT_ETC2=0` (`debug.hakux.dxt_etc2=0`) keeps the
+  alpha), 21 MB for the same level. `HAKUX_HLE_DXT_ETC2=0` (`debug.hakux.dxt_etc2=0`) keeps the
   decode; `=1` encodes on a GPU with BC too. The caps log line shows
   `etc2=` and `dxt_etc2=`.
 
 - **A budget for texture images** — The push-buffer decoder drops its
   least recently used textures when their images pass a byte budget, as it
   did when their table filled (a dropped texture is defined again when a
-  draw next samples it; textures the current frame samples are kept, the
-  budget passed until it ends): 96 MB on a host with 1.5 GB of RAM or less, none
+  draw next samples it; those the draw being built samples are kept, the
+  budget passed until the frame ends): 96 MB on a host with 1.5 GB of RAM or less, none
   elsewhere; `HAKUX_HLE_TEX_BUDGET_MB` (`debug.hakux.tex_budget_mb`) sets
   it, 0 for none. The periodic `hakuX-hle-pb` line shows the textures held
   and their bytes.

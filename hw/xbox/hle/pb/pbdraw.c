@@ -277,6 +277,8 @@ static struct {
     uint64_t tex_budget;                /* tex_bytes past it: tex_evict; 0 none */
     bool tex_budget_read;
     uint64_t tex_budget_stuck;          /* epoch + 1 budget eviction found none to drop */
+    uint64_t draw_epoch;                /* the epoch the draw being built began at: a texture
+                                           checked since is its (tex_evict keeps it) */
     uint64_t tex_defs, tex_flushes;
 } g_pd;
 
@@ -2549,10 +2551,13 @@ static int cmp_u64(const void *a, const void *b)
  * images with them, and the rest are placed again (open addressing has no
  * deletion). Keys of memory a title has reused piled up until every texture
  * went at once, and the working set was defined again over the next frames.
- * None checked this epoch goes: the draw being built may hold its id.
+ * None checked since the draw being built began (draw_epoch: a wait for
+ * a texture's texels kicks, and the epoch moves between its stages) goes:
+ * that draw may hold its id.
  * Table full and every texture checked this epoch: all go (tex_flush).
  * Past the budget only (full false), none goes then and the budget is
- * overshot until the epoch ends. False: none went. */
+ * overshot until the epoch ends. Fewer than four: the oldest, if cold.
+ * False: none went. */
 static bool tex_evict(bool full)
 {
     static uint64_t when[TEX_SLOTS];
@@ -2568,9 +2573,11 @@ static bool tex_evict(bool full)
     }
     qsort(when, n, sizeof(when[0]), cmp_u64);
     /* a quarter: all checked before the cut, and as many checked at it as
-     * that leaves room for (a scene's textures all checked at one epoch) */
+     * that leaves room for (a scene's textures all checked at one epoch);
+     * fewer than four, the oldest one (a quarter rounded to none left a
+     * cache of one to three cold textures past the budget for good) */
     const uint64_t cut = when[n / 4];
-    unsigned ties = n / 4;
+    unsigned ties = MAX(n / 4, 1u);
     for (unsigned i = 0; when[i] < cut; i++) {
         ties--;
     }
@@ -2579,7 +2586,7 @@ static bool tex_evict(bool full)
         if (!t->id) {
             continue;
         }
-        bool go = t->checked != g_pd.epoch && (t->checked < cut || (t->checked == cut && ties));
+        bool go = t->checked < g_pd.draw_epoch && (t->checked < cut || (t->checked == cut && ties));
         ties -= go && t->checked == cut;
         if (!go) {
             keep[nkeep++] = *t;
@@ -3441,6 +3448,7 @@ static void emit(HleCmdDraw *d)
     if (g_pd.ds && ((R(0x030C) && R(0x035C)) || (R(0x032C) && (R(0x0360) & 0xFF)))) {
         ds_written();                   /* depth test and writes, or stencil writes */
     }
+    g_pd.draw_epoch = g_pd.epoch;       /* (tex_evict: these stages' textures stay) */
     for (unsigned s = 0; s < 4; s++) {
         bool unset, lin;
         d->tex[s] = texture(s, &unset, &lin);
